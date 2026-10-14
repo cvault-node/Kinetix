@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file alias="Kinetix-ico.ico">icons/Kinetix-ico.ico</file>
+        <file alias="Kinetix-ico.png">icons/Kinetix-ico.png</file>
+    </qresource>
+</RCC>

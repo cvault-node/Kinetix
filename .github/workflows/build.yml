@@ -1,0 +1,120 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  QT_VERSION: '6.8.3'
+  QT_MODULES: 'qtwebengine qtwebchannel qtpositioning'
+
+jobs:
+  windows:
+    name: Windows (.exe + instalador NSIS)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          modules: ${{ env.QT_MODULES }}
+          cache: true
+
+      - name: Instalar NSIS
+        run: choco install nsis -y --no-progress
+
+      - name: Configurar
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Compilar
+        run: cmake --build build --config Release
+
+      - name: Empaquetar
+        working-directory: build
+        run: |
+          cpack -C Release -G NSIS
+          cpack -C Release -G ZIP
+
+      - name: Subir artefactos
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kinetix-Windows
+          path: |
+            build/*.exe
+            build/*.zip
+
+      - name: Publicar en Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/Kinetix-*.exe
+            build/Kinetix-*.zip
+
+  linux:
+    name: Linux (AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependencias del sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev libglx-mesa0 libxkbcommon-x11-0 libnss3 \
+            libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2 \
+            libxkbfile1 libxcursor1 libegl1 libpulse0 libxss1 \
+            libfuse2 wget file
+
+      - name: Instalar Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: ${{ env.QT_MODULES }}
+          cache: true
+
+      - name: Configurar
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+
+      - name: Compilar
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Descargar herramientas AppImage
+        run: |
+          base=https://github.com/linuxdeploy
+          wget -q -O linuxdeploy                     $base/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q -O linuxdeploy-plugin-qt           $base/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          wget -q -O linuxdeploy-plugin-appimage     $base/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
+          chmod +x linuxdeploy linuxdeploy-plugin-qt linuxdeploy-plugin-appimage
+
+      - name: Crear AppImage
+        env:
+          QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
+          EXTRA_QT_MODULES: webenginewidgets webchannel positioning
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          export PATH="$PWD:$PATH"
+          mkdir -p AppDir
+          DESTDIR="$PWD/AppDir" cmake --install build
+          ./linuxdeploy --appdir AppDir --plugin qt --output appimage
+
+      - name: Subir artefactos
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kinetix-Linux
+          path: Kinetix-*.AppImage
+
+      - name: Publicar en Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Kinetix-*.AppImage

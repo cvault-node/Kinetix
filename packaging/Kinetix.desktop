@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Kinetix
+GenericName=Web Browser
+Comment=Navegador web rapido y ligero
+Exec=Kinetix %u
+Icon=kinetix
+Terminal=false
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupWMClass=Kinetix

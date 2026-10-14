@@ -1,0 +1,64 @@
+# ---- Build ----
+/build/
+/build-*/
+/out/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+CPackConfig.cmake
+CPackSourceConfig.cmake
+*.cmake.user
+
+# ---- Qt ----
+*.pro.user*
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*_autogen/
+
+# ---- Binarios / objetos ----
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.exp
+
+# ---- Instaladores ----
+*.AppImage
+*.dmg
+*.msi
+*.deb
+_CPack_Packages/
+
+# ---- Respaldos ----
+*.bak
+*.orig
+*~
+
+# ---- IDEs ----
+.vs/
+.vscode/
+.idea/
+*.user
+*.sln
+*.vcxproj
+*.vcxproj.*
+!resources/Kinetix.rc
+
+# ---- Sistema ----
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---- Datos de la app ----
+.navegador_personal/

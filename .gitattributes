@@ -1,0 +1,15 @@
+# Normalizar finales de línea
+* text=auto
+
+# Forzar LF en archivos que lo requieren en Linux/CI
+*.sh        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.desktop   text eol=lf
+CMakeLists.txt text eol=lf
+
+# Archivos binarios
+*.ico       binary
+*.png       binary
+*.exe       binary
+*.dll       binary
