@@ -1,0 +1,29 @@
+name: Sugerencia de función
+description: Propón una idea o mejora para Kinetix
+title: "[Idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ¡Gracias por tu idea! Cuéntanos qué te gustaría ver en Kinetix.
+  - type: textarea
+    id: problem
+    attributes:
+      label: ¿Qué problema resuelve?
+      description: Describe la necesidad o el inconveniente actual.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Solución propuesta
+      description: ¿Cómo imaginas la función? Sé tan concreto como quieras.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas (opcional)
+    validations:
+      required: false
