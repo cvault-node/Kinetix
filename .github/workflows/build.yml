@@ -17,7 +17,7 @@ env:
 jobs:
   windows:
     name: Windows (.exe + instalador NSIS)
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
@@ -99,7 +99,7 @@ jobs:
       - name: Crear AppImage
         env:
           QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
-          EXTRA_QT_MODULES: webenginewidgets webchannel positioning
+          EXTRA_QT_MODULES: webenginewidgets webchannel positioning serialport
           APPIMAGE_EXTRACT_AND_RUN: 1
         run: |
           export PATH="$PWD:$PATH"
