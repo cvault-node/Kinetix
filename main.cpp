@@ -1,4 +1,5 @@
 #include "MainWindow.hpp"
+#include "Utils.hpp"
 #include <QApplication>
 #include <QCoreApplication>
 #include <QWebEngineProfile>
@@ -12,7 +13,7 @@
 #include <windows.h>
 #endif
 
-// Memoria física total del sistema en MB (0 si no se puede consultar).
+// Memoria fÃ­sica total del sistema en MB (0 si no se puede consultar).
 static qint64 totalPhysicalRamMb()
 {
 #ifdef Q_OS_WIN
@@ -35,23 +36,23 @@ int main(int argc, char *argv[])
     // ------------------------------------------------------------------
     // Chromium flags.
     //
-    // Nota de seguridad: NO se desactiva la detección de phishing ni el Safe
-    // Browsing. Sí se desactiva --disable-background-networking, que impide
+    // Nota de seguridad: NO se desactiva la detecciÃ³n de phishing ni el Safe
+    // Browsing. SÃ­ se desactiva --disable-background-networking, que impide
     // que el navegador haga peticiones ocultas a Google en segundo plano;
     // como consecuencia las listas de Safe Browsing no se descargan solas.
-    // Es una decisión de privacidad deliberada, documentada en Privacidad.
+    // Es una decisiÃ³n de privacidad deliberada, documentada en Privacidad.
     //
     // Nota de rendimiento: se respetan las optimizaciones en segundo plano de
-    // Chromium (backgrounding y throttling de timers) y la protección contra
-    // inundación de IPC. Desactivarlas, como se hacía antes, hacía que las
-    // pestañas en segundo plano consumieran CPU constantemente y que la
-    // interfaz se bloqueara con páginas que abusan del IPC.
+    // Chromium (backgrounding y throttling de timers) y la protecciÃ³n contra
+    // inundaciÃ³n de IPC. Desactivarlas, como se hacÃ­a antes, hacÃ­a que las
+    // pestaÃ±as en segundo plano consumieran CPU constantemente y que la
+    // interfaz se bloqueara con pÃ¡ginas que abusan del IPC.
     // ------------------------------------------------------------------
     const qint64 ramMb = totalPhysicalRamMb();
     const int cores = qMax(1, QThread::idealThreadCount());
 
-    // Límite de procesos de renderizado según la RAM disponible. Menos
-    // procesos = mucha menos memoria; las pestañas del mismo sitio se
+    // LÃ­mite de procesos de renderizado segÃºn la RAM disponible. Menos
+    // procesos = mucha menos memoria; las pestaÃ±as del mismo sitio se
     // comparten igualmente gracias a --process-per-site.
     int rendererLimit = 6;
     const bool lowEndDevice = (ramMb > 0 && ramMb <= 4096);
@@ -61,7 +62,7 @@ int main(int argc, char *argv[])
         else if (ramMb <= 16384) rendererLimit = 8;
         else                     rendererLimit = 12;
     }
-    // Hilos de rasterizado: la mitad de los núcleos, como hace Chromium por
+    // Hilos de rasterizado: la mitad de los nÃºcleos, como hace Chromium por
     // defecto. Forzarlos alto en una CPU modesta empeora la fluidez.
     const int rasterThreads = qBound(1, cores / 2, 4);
 
@@ -81,41 +82,49 @@ int main(int argc, char *argv[])
           << QStringLiteral("--disable-background-networking")
           << QStringLiteral("--use-gl=angle");
 
-    // Modo de dispositivo de gama baja (Chromium). Reduce el tamaño del caché
-    // de imágenes, el número de tiles rasterizados por fotograma, los límites
+    // Modo de dispositivo de gama baja (Chromium). Reduce el tamaÃ±o del cachÃ©
+    // de imÃ¡genes, el nÃºmero de tiles rasterizados por fotograma, los lÃ­mites
     // de memoria y la escala de algunas texturas. En un equipo con poca RAM y
-    // 2 núcleos hace que las páginas pesadas carguen antes y con menos memoria.
+    // 2 nÃºcleos hace que las pÃ¡ginas pesadas carguen antes y con menos memoria.
     if (lowEndDevice)
         flags << QStringLiteral("--enable-low-end-device-mode");
 
-    // Decodificación de vídeo por hardware. Chromium la trae activada; en
-    // algunas gráficas Intel antiguas provoca parpadeos al reproducir vídeo,
-    // así que se desactiva por defecto. Se puede volver a activar desde
-    // Configuración ▸ Rendimiento.
+    // DecodificaciÃ³n de vÃ­deo por hardware. Chromium la trae activada; en
+    // algunas grÃ¡ficas Intel antiguas provoca parpadeos al reproducir vÃ­deo,
+    // asÃ­ que se desactiva por defecto. Se puede volver a activar desde
+    // ConfiguraciÃ³n â–¸ Rendimiento.
     if (rec.value(QStringLiteral("rendimiento/video_hw"), false).toBool() == false)
         flags << QStringLiteral("--disable-accelerated-video-decode");
 
     // ------------------------------------------------------------------
-    // Modo gráfico. En Windows, Qt WebEngine comparte las texturas D3D11 del
-    // compositor de Chromium con el escenario gráfico de Qt (RHI). Si ambos
+    // Modo grÃ¡fico. En Windows, Qt WebEngine comparte las texturas D3D11 del
+    // compositor de Chromium con el escenario grÃ¡fico de Qt (RHI). Si ambos
     // usan dispositivos distintos, Chromium exporta su fotograma como recurso
     // DXGI y Qt lo reimporta en cada fotograma ("D3D: Importing DXGI Resource
-    // into D3D11 Texture"). En controladores Intel antiguos esa interoperación
-    // produce parpadeos constantes en las páginas modernas (capas, animaciones,
-    // vídeo).
+    // into D3D11 Texture"). En controladores Intel antiguos esa interoperaciÃ³n
+    // produce parpadeos constantes en las pÃ¡ginas modernas (capas, animaciones,
+    // vÃ­deo).
     //
-    // KINETIX_GPU_MODE permite elegir la configuración sin recompilar:
-    //   (vacío)/"softcomp" → composición final en software (quita el parpadeo,
-    //                        pero es más lento en CPUs modestas)
-    //   "native"           → composición por GPU con el backend RHI por defecto
-    //   "opengl"           → GL compartido (Qt y Chromium sobre ANGLE/D3D11)
-    //   "d3d12"            → composición por GPU con RHI D3D12
-    //   "off"              → sin aceleración (lo fuerza la configuración)
+    // KINETIX_GPU_MODE permite elegir la configuraciÃ³n sin recompilar:
+    //   (vacÃ­o)/"softcomp" â†’ composiciÃ³n final en software (quita el parpadeo,
+    //                        pero es mÃ¡s lento en CPUs modestas)
+    //   "native"           â†’ composiciÃ³n por GPU con el backend RHI por defecto
+    //   "opengl"           â†’ GL compartido (Qt y Chromium sobre ANGLE/D3D11)
+    //   "d3d12"            â†’ composiciÃ³n por GPU con RHI D3D12
+    //   "off"              â†’ sin aceleraciÃ³n (lo fuerza la configuraciÃ³n)
     // ------------------------------------------------------------------
     QString gpuMode = qEnvironmentVariable("KINETIX_GPU_MODE").trimmed().toLower();
-    if (gpuMode.isEmpty())
-        gpuMode = rec.value(QStringLiteral("rendimiento/composicion_gpu"), false).toBool()
-                      ? QStringLiteral("basic") : QStringLiteral("softcomp");
+    if (gpuMode.isEmpty()) {
+        // Si el usuario fijo explicitamente un modo, se respeta. Si no, se
+        // elige el optimo segun la GPU: las graficas Intel integradas (que
+        // parpadean) van a software; el resto, a composicion por GPU (rapida).
+        if (rec.contains(QStringLiteral("rendimiento/composicion_gpu")))
+            gpuMode = rec.value(QStringLiteral("rendimiento/composicion_gpu"), false).toBool()
+                          ? QStringLiteral("basic") : QStringLiteral("softcomp");
+        else
+            gpuMode = hardwarePrefersSoftwareCompositing() ? QStringLiteral("softcomp")
+                                                     : QStringLiteral("basic");
+    }
     if (rec.value(QStringLiteral("recursos/gpu_acelerado"), true).toBool() == false)
         gpuMode = QStringLiteral("off");
 
@@ -127,34 +136,34 @@ int main(int argc, char *argv[])
         const bool wantBasic = (gpuMode == QLatin1String("basic")
                                 || gpuMode == QLatin1String("openglbasic"));
         if (wantOpenGL) {
-            // GL sobre ANGLE/D3D11 para el escenario gráfico de Qt.
+            // GL sobre ANGLE/D3D11 para el escenario grÃ¡fico de Qt.
             qputenv("QSG_RHI_BACKEND", "opengl");
             qputenv("QT_OPENGL", "angle");
             qputenv("QT_ANGLE_PLATFORM", "d3d11");
         }
         if (wantBasic) {
-            // Bucle de render monohilo: evita que la composición concurrente
+            // Bucle de render monohilo: evita que la composiciÃ³n concurrente
             // muestre fotogramas parciales (parpadeo) al importar la textura.
             qputenv("QSG_RENDER_LOOP", "basic");
         }
         if (gpuMode == QLatin1String("softcomp")) {
-            // Composición final en software: es el único modo sin parpadeo en
-            // este tipo de gráficas. NO se combina con rasterizado por GPU
-            // (sería contradictorio y provocaría paradas por lectura de
-            // texturas), así que se ignora el ajuste gpu_raster.
+            // ComposiciÃ³n final en software: es el Ãºnico modo sin parpadeo en
+            // este tipo de grÃ¡ficas. NO se combina con rasterizado por GPU
+            // (serÃ­a contradictorio y provocarÃ­a paradas por lectura de
+            // texturas), asÃ­ que se ignora el ajuste gpu_raster.
             flags << QStringLiteral("--disable-gpu-compositing");
-            // Rasterizado en software: el número de hilos sí influye, así que
-            // se usan todos los núcleos disponibles en lugar de la mitad.
+            // Rasterizado en software: el nÃºmero de hilos sÃ­ influye, asÃ­ que
+            // se usan todos los nÃºcleos disponibles en lugar de la mitad.
             flags << QStringLiteral("--num-raster-threads=%1").arg(qBound(1, cores, 4));
         } else {
-            // Modos con composición por GPU. Las superposiciones de vídeo
-            // (MPO) de las gráficas Intel antiguas son otra fuente de
+            // Modos con composiciÃ³n por GPU. Las superposiciones de vÃ­deo
+            // (MPO) de las grÃ¡ficas Intel antiguas son otra fuente de
             // parpadeos. Se desactivan SOLO ellas: desactivar DirectComposition
             // completo bloqueaba el navegador con el bucle monohilo.
             flags << QStringLiteral("--disable-direct-composition-video-overlays");
-            // El rasterizado por GPU es otra fuente de parpadeos en gráficas
-            // Intel antiguas, así que solo se usa en el modo "native"
-            // explícito; el modo "basic" prioriza la estabilidad.
+            // El rasterizado por GPU es otra fuente de parpadeos en grÃ¡ficas
+            // Intel antiguas, asÃ­ que solo se usa en el modo "native"
+            // explÃ­cito; el modo "basic" prioriza la estabilidad.
             if (gpuMode == QLatin1String("native")
                 && rec.value(QStringLiteral("rendimiento/gpu_raster"), false).toBool()) {
                 flags << QStringLiteral("--enable-gpu-rasterization");
@@ -166,14 +175,14 @@ int main(int argc, char *argv[])
         flags << QStringLiteral("--force-gpu-mem-available-mb=%1").arg(gpuMb);
     qint64 jsHeapMb = rec.value(QStringLiteral("recursos/ram_max_mb"), 0).toLongLong();
     // En equipos con poca RAM (4 GB o menos) se limita el heap de V8 por
-    // pestaña. Así el recolector de basura actúa antes y cada renderizador
+    // pestaÃ±a. AsÃ­ el recolector de basura actÃºa antes y cada renderizador
     // deja de crecer sin control, que es lo que provoca el swap y la lentitud.
     if (jsHeapMb <= 0 && ramMb > 0 && ramMb <= 4096)
         jsHeapMb = 256;
     if (jsHeapMb > 0)
         flags << QStringLiteral("--js-flags=--max-old-space-size=%1").arg(jsHeapMb);
 
-    // Diagnóstico opcional de la GPU/composición de Chromium. Con la variable
+    // DiagnÃ³stico opcional de la GPU/composiciÃ³n de Chromium. Con la variable
     // KINETIX_GPU_LOG=<ruta> se vuelca el registro de Chromium a ese archivo,
     // para poder averiguar la causa de parpadeos o errores de renderizado.
     if (qEnvironmentVariableIsSet("KINETIX_GPU_LOG")) {
@@ -184,7 +193,7 @@ int main(int argc, char *argv[])
                   << QStringLiteral("--v=1");
     }
 
-    // Ganchos de diagnóstico/pruebas (permiten experimentar sin recompilar).
+    // Ganchos de diagnÃ³stico/pruebas (permiten experimentar sin recompilar).
     if (qEnvironmentVariableIsSet("KINETIX_EXTRA_FLAGS")) {
         const QString extra = qEnvironmentVariable("KINETIX_EXTRA_FLAGS").trimmed();
         if (!extra.isEmpty())
@@ -221,9 +230,9 @@ int main(int argc, char *argv[])
     profile->setPersistentCookiesPolicy(QWebEngineProfile::AllowPersistentCookies);
     profile->setHttpCacheType(QWebEngineProfile::DiskHttpCache);
     qint64 cacheMb = rec.value(QStringLiteral("recursos/cache_mb"), 256).toLongLong();
-    // Migración: 64 MB era el valor por defecto antiguo y quedó guardado en
-    // las configuraciones existentes. Una caché tan pequeña obliga a volver a
-    // descargar recursos y ralentiza la navegación; se eleva al valor actual.
+    // MigraciÃ³n: 64 MB era el valor por defecto antiguo y quedÃ³ guardado en
+    // las configuraciones existentes. Una cachÃ© tan pequeÃ±a obliga a volver a
+    // descargar recursos y ralentiza la navegaciÃ³n; se eleva al valor actual.
     if (cacheMb == 64) {
         cacheMb = 256;
         rec.setValue(QStringLiteral("recursos/cache_mb"), cacheMb);

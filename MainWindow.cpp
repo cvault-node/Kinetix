@@ -4372,6 +4372,11 @@ void MainWindow::showSettingsDialog()
     perfLayout->addWidget(videoHw);
     perfLayout->addWidget(gpuRaster);
     perfLayout->addWidget(gpuComp);
+    perfLayout->addSpacing(8);
+    auto *btnOptimal = new QPushButton(tr("Usar configuración óptima para este equipo"), perf);
+    btnOptimal->setToolTip(tr("Ajusta automáticamente GPU, vídeo y composición a lo más "
+                              "rápido y estable para tu hardware. Requiere reiniciar."));
+    perfLayout->addWidget(btnOptimal);
     perfLayout->addStretch();
 
     tabs->addTab(perf, tr("Rendimiento"));
@@ -4512,6 +4517,50 @@ void MainWindow::showSettingsDialog()
                 tr("Aceleración por hardware, memoria de GPU y RAM se aplicarán al reiniciar el navegador."));
         }
         dialog->accept();
+    });
+    // Configuracion optima automática: detecta el hardware y ajusta GPU, vídeo
+    // y composicion a lo mas rapido y estable. Requiere reiniciar.
+    connect(btnOptimal, &QPushButton::clicked, dialog, [this, dialog, chkGpu, spGpuMb, spRamMb,
+                                                        spCacheMb, freezeBg, prefetch, videoLight,
+                                                        videoHw, gpuRaster, gpuComp]() {
+        const bool needsSoftware = hardwarePrefersSoftwareCompositing();
+        const bool gpuCompositing = !needsSoftware;
+
+        chkGpu->setChecked(true);
+        spGpuMb->setValue(0);
+        spRamMb->setValue(0);
+        spCacheMb->setValue(256);
+        freezeBg->setChecked(true);
+        prefetch->setChecked(false);
+        videoLight->setChecked(true);
+        videoHw->setChecked(gpuCompositing);
+        gpuRaster->setChecked(false);
+        gpuComp->setChecked(gpuCompositing);
+
+        m_settings->setValue(QStringLiteral("recursos/gpu_acelerado"), true);
+        m_settings->setValue(QStringLiteral("recursos/memoria_gpu_mb"), 0);
+        m_settings->setValue(QStringLiteral("recursos/ram_max_mb"), 0);
+        m_settings->setValue(QStringLiteral("recursos/cache_mb"), 256);
+        m_settings->setValue(QStringLiteral("rendimiento/congelar_fondo"), true);
+        m_settings->setValue(QStringLiteral("rendimiento/prefetch"), false);
+        m_settings->setValue(QStringLiteral("rendimiento/video_ligero"), true);
+        m_settings->setValue(QStringLiteral("rendimiento/video_hw"), gpuCompositing);
+        m_settings->setValue(QStringLiteral("rendimiento/gpu_raster"), false);
+        m_settings->setValue(QStringLiteral("rendimiento/composicion_gpu"), gpuCompositing);
+        if (m_profile)
+            m_profile->setHttpCacheMaximumSize(qint64(256) * 1024 * 1024);
+        m_settings->sync();
+
+        QMessageBox::information(dialog, tr("Configuración óptima aplicada"),
+            tr("Se ha aplicado la configuración óptima para este equipo:\n\n"
+               "• Renderizado: %1\n"
+               "• Vídeo por hardware: %2\n"
+               "• Congelar pestañas en segundo plano: sí\n"
+               "• Caché: 256 MB\n\n"
+               "Reinicia el navegador para que surta efecto.")
+                .arg(needsSoftware ? tr("composición en software (sin parpadeo)")
+                                   : tr("composición por GPU (más rápido)")
+                    , gpuCompositing ? tr("sí") : tr("no")));
     });
     connect(clearBtn, &QPushButton::clicked, this, [this]() {
         QWebEngineProfile *p = m_profile ? m_profile : QWebEngineProfile::defaultProfile();

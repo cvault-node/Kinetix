@@ -29,4 +29,11 @@ QIcon loadIconFromPath(const QString &path);
 QIcon makeNavIcon(const QString &name, bool dark, const QColor &color = QColor());
 QIcon makeLockIcon(const QString &scheme, bool dark);
 
+// Detecta si la GPU principal conviene con composicion en software por defecto.
+// En Windows consulta el adaptador principal por DXGI: las graficas Intel
+// integradas antiguas presentan parpadeos con el puente DXGI de Qt WebEngine.
+// Se usa para elegir el modo grafico optimo al iniciar y para el boton
+// "Configuracion optima" de Configuracion.
+bool hardwarePrefersSoftwareCompositing();
+
 #endif // UTILS_HPP

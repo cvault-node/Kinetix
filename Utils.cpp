@@ -266,3 +266,35 @@ QList<ProcSample> sampleKinetixProcesses()
 #endif
     return out;
 }
+
+#if defined(Q_OS_WIN)
+#include <dxgi.h>
+#pragma comment(lib, "dxgi.lib")
+#endif
+
+bool hardwarePrefersSoftwareCompositing()
+{
+#if defined(Q_OS_WIN)
+    // Solo se consulta el adaptador principal: es el que usa Qt WebEngine para
+    // composicion. Las graficas Intel integradas antiguas son el caso documentado
+    // de parpadeos con el puente DXGI de Qt WebEngine.
+    IDXGIFactory1 *factory = nullptr;
+    const HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1),
+                                           reinterpret_cast<void **>(&factory));
+    if (FAILED(hr) || !factory)
+        return false;
+    IDXGIAdapter1 *adapter = nullptr;
+    bool intel = false;
+    if (SUCCEEDED(factory->EnumAdapters1(0, &adapter)) && adapter) {
+        DXGI_ADAPTER_DESC1 desc;
+        if (SUCCEEDED(adapter->GetDesc1(&desc)))
+            intel = QString::fromWCharArray(desc.Description)
+                        .contains(QStringLiteral("Intel"), Qt::CaseInsensitive);
+        adapter->Release();
+    }
+    factory->Release();
+    return intel;
+#else
+    return false;
+#endif
+}

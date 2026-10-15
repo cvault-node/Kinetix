@@ -5,7 +5,7 @@ Todos los cambios relevantes de este proyecto se documentan en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y el proyecto sigue el [Versionado Semántico](https://semver.org/lang/es/).
 
-## [Sin publicar]
+## [1.1.0] - 2026-10-15
 
 ### Añadido
 
@@ -31,6 +31,9 @@ y el proyecto sigue el [Versionado Semántico](https://semver.org/lang/es/).
 - **Ventana privada** (`Ctrl+Shift+N` o menú ▸ Nueva ventana privada): perfil *off-the-record*; cookies, caché y almacenamiento web viven solo en memoria, el historial no se escribe en disco y la ventana no pisa los ajustes de la normal.
 - **Vídeo más ligero en streaming**: script que pausa los vídeos silenciados que quedan fuera de pantalla. No toca los vídeos que el usuario arranca a propósito. Desactivado por defecto y configurable en Configuración ▸ Rendimiento.
 - **Decodificación de vídeo por hardware conmutable** en Configuración ▸ Rendimiento: viene **desactivada** por defecto (en gráficas Intel antiguas provoca parpadeo al reproducir vídeo) y puede activarse para mejorar el streaming.
+- **Botón "Usar configuración óptima para este equipo"** en Configuración ▸ Rendimiento: detecta la GPU del equipo y aplica automáticamente el modo más rápido y estable (composición por GPU en gráficas modernas; composición en software en Intel integradas antiguas, donde la GPU provoca parpadeo). Ajusta también vídeo por hardware, congelado de pestañas y caché. Requiere reiniciar.
+- **Modo de composición por defecto elegido por hardware**: si no hay ajuste guardado, el navegador detecta la GPU principal (por DXGI) y arranca en el modo óptimo sin necesidad de tocar nada.
+
 
 ### Cambiado
 
@@ -68,6 +71,8 @@ y el proyecto sigue el [Versionado Semántico](https://semver.org/lang/es/).
 - **Descargas saneadas:** los nombres propuestos por el servidor se limpian antes de escribir (sin separadores de ruta, sin `..`, sin caracteres reservados de Windows, sin nombres reservados como `CON`/`AUX`, longitud limitada).
 - **Eliminada la bandera** `--disable-client-side-phishing-detection` de los flags de Chromium.
 - **Privacidad documentada** en Configuración → Privacidad: qué datos se guardan, dónde, qué NO se hace, y una nota sobre Safe Browsing. Nuevo botón "Borrar todos los datos de navegación…".
+- **Comprobador de actualizaciones endurecido**: valida el identificador de repositorio, la versión actual y publicada, y solo acepta respuestas `https://github.com` sin seguir redirecciones, con tamaño de respuesta acotado y timeout. Así nadie puede inyectar una URL de actualización falsa.
+- Repositorio con **MIT** y notas de propietario, más **CODEOWNERS**, **CONTRIBUTING.md** y **SECURITY.md** para que las contribuciones se revisen y no se introduzcan fallos de seguridad.
 
 ### Conocido (no resuelto)
 
