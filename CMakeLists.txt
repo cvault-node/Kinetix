@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Nombre del proyecto y lenguaje
-project(Kinetix VERSION 1.0.0 LANGUAGES CXX)
+project(Kinetix VERSION 1.1.0 LANGUAGES CXX)
 
 # Estándar de C++
 set(CMAKE_CXX_STANDARD 17)
@@ -11,7 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
 # Buscar Qt6 y los módulos necesarios
-find_package(Qt6 REQUIRED COMPONENTS Widgets WebEngineWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets WebEngineWidgets Pdf PdfWidgets Network)
 
 # Archivos fuente
 set(SOURCES
@@ -21,6 +21,8 @@ set(SOURCES
     CodeEditor.cpp
     Utils.cpp
     Theme.cpp
+    KinetixPage.cpp
+    UpdateChecker.cpp
 )
 
 # Archivos de cabecera (para MOC de Qt)
@@ -30,6 +32,8 @@ set(HEADERS
     CodeEditor.hpp
     Utils.hpp
     Theme.hpp
+    KinetixPage.hpp
+    UpdateChecker.hpp
 )
 
 # Recursos (icono de la aplicación)
@@ -61,6 +65,9 @@ endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Widgets
     Qt6::WebEngineWidgets
+    Qt6::Pdf
+    Qt6::PdfWidgets
+    Qt6::Network
 )
 
 # ---------------------------------------------------------------------------

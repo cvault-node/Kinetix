@@ -3,6 +3,7 @@
 #include "CodeEditor.hpp"
 #include "BrowserTab.hpp"
 #include "Theme.hpp"
+#include "UpdateChecker.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -31,10 +32,10 @@
 #include <QWebEngineCookieStore>
 #include <QWebEngineScript>
 #include <QWebEngineScriptCollection>
-#include <QWebEngineUrlRequestInterceptor>
-#include <QWebEngineUrlRequestInfo>
 #include <QWebEngineNewWindowRequest>
+#include <QWebEngineFullScreenRequest>
 #include <QWebEngineDownloadRequest>
+#include <QWebEngineFindTextResult>
 #include <QIcon>
 #include <QPainterPath>
 #include <QTimer>
@@ -64,11 +65,37 @@
 #include <QWheelEvent>
 #include <QProgressBar>
 #include <QFrame>
+#include <QScrollArea>
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QStyle>
+#include <QTextBrowser>
+#include <QPushButton>
+#include <QStyledItemDelegate>
+#include <QStyleOptionViewItem>
+#include <QPaintEvent>
 #include <QColor>
-
+#include <QPdfDocument>
+#include <QPdfView>
+#include <QPdfPageNavigator>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QUrlQuery>
+#include <QImageReader>
+#include <QtWebEngineCore/qtwebenginecoreglobal.h>
+#include <QSysInfo>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
+#include <QScrollBar>
+#include <QHeaderView>
+#include <QWebEngineSettings>
+#include <QDateTime>
+#include <QSet>
+#include <QThread>
+#include <QHash>
+#include <QPair>
+#include <memory>
 class TabsWidget : public QTabWidget
 {
 public:
@@ -118,6 +145,7 @@ public:
 signals:
     void newTabRequested();
     void closeRequested(int index);
+    void tabMoveRequested(int from, int to);
 
 protected:
     void paintEvent(QPaintEvent *) override
@@ -168,7 +196,36 @@ protected:
             m_hoverClose = onClose;
             update();
         }
+        if (m_pressIndex >= 0 && (event->buttons() & Qt::LeftButton) && count() > 1) {
+            int target = -1;
+            for (int i = 0; i < m_tabs.count(); ++i) {
+                if (m_tabs.at(i).contains(pos)) {
+                    target = i;
+                    break;
+                }
+            }
+            const int nd = (target >= 0 && target != m_pressIndex) ? target : -1;
+            if (nd != m_dragIndex) {
+                m_dragIndex = nd;
+                update();
+            }
+        }
         QTabBar::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        const int from = m_pressIndex;
+        const int to = m_dragIndex;
+        m_pressIndex = -1;
+        m_dragIndex = -1;
+        if (from >= 0 && to >= 0 && from != to) {
+            emit tabMoveRequested(from, to);
+            update();
+            return;
+        }
+        QTabBar::mouseReleaseEvent(event);
+        update();
     }
 
     void mousePressEvent(QMouseEvent *event) override
@@ -185,10 +242,13 @@ protected:
                     emit closeRequested(i);
                 } else {
                     setCurrentIndex(i);
+                    m_pressIndex = i;
+                    m_dragIndex = -1;
                 }
                 return;
             }
         }
+        m_pressIndex = -1;
         QTabBar::mousePressEvent(event);
     }
 
@@ -301,6 +361,13 @@ private:
         p.setFont(xf);
         p.setPen(m_pal.color(onClose ? m_pal.hoverText : m_pal.sClose));
         p.drawText(xr, Qt::AlignCenter, QStringLiteral("✕"));
+
+        if (m_dragIndex >= 0 && i == m_dragIndex) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(m_pal.color(m_pal.accent));
+            const int lx = (m_dragIndex > m_pressIndex) ? r.right() - 1 : r.left();
+            p.drawRect(QRect(lx, r.top() + 6, 2, r.height() - 12));
+        }
     }
 
     void drawPlus(QPainter &p)
@@ -329,6 +396,213 @@ private:
     QRect m_plusRect;
     QList<bool> m_loading;
     int m_angle = 0;
+    int m_pressIndex = -1;
+    int m_dragIndex = -1;
+};
+
+class HistoryItemDelegate : public QStyledItemDelegate
+{
+public:
+    explicit HistoryItemDelegate(const Palette &pal, QObject *parent = nullptr)
+        : QStyledItemDelegate(parent)
+        , m_pal(pal)
+    {
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &index) const override
+    {
+        if (index.data(Qt::UserRole).toString().isEmpty())
+            return QSize(0, 120);
+        return QSize(0, 50);
+    }
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override
+    {
+        painter->save();
+        const bool selected = option.state & QStyle::State_Selected;
+        const bool hovered = option.state & QStyle::State_MouseOver;
+        const QRect r = option.rect.adjusted(4, 3, -4, -3);
+
+        if (selected || hovered) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(m_pal.color(selected ? m_pal.menuSelection : m_pal.rowHover));
+            painter->drawRoundedRect(r, 6, 6);
+        }
+
+        const QString url = index.data(Qt::UserRole).toString();
+
+        if (url.isEmpty()) {
+            painter->setPen(m_pal.color(m_pal.textMuted));
+            painter->setFont(option.font);
+            painter->drawText(r, Qt::AlignCenter | Qt::TextWordWrap,
+                              index.data(Qt::DisplayRole).toString());
+            painter->restore();
+            return;
+        }
+
+        const QString title = index.data(Qt::DisplayRole).toString();
+        const QString subtitle = index.data(Qt::UserRole + 1).toString();
+
+        QFont boldFont = option.font;
+        boldFont.setBold(true);
+        const QFontMetrics boldFm(boldFont);
+        QFont urlFont = option.font;
+        if (urlFont.pointSizeF() > 0)
+            urlFont.setPointSizeF(urlFont.pointSizeF() - 1.0);
+        const QFontMetrics urlFm(urlFont);
+
+        const int x = r.left() + 10;
+        const int w = r.width() - 20;
+
+        if (subtitle.isEmpty()) {
+            painter->setFont(boldFont);
+            painter->setPen(m_pal.color(selected ? m_pal.strongText : m_pal.text));
+            painter->drawText(QRect(x, r.top(), w, r.height()),
+                              Qt::AlignVCenter | Qt::AlignLeft,
+                              boldFm.elidedText(title, Qt::ElideRight, w));
+            painter->restore();
+            return;
+        }
+
+        painter->setFont(boldFont);
+        painter->setPen(m_pal.color(selected ? m_pal.strongText : m_pal.text));
+        painter->drawText(QRect(x, r.top() + 6, w, boldFm.height()),
+                          Qt::AlignVCenter | Qt::AlignLeft,
+                          boldFm.elidedText(title, Qt::ElideRight, w));
+
+        painter->setFont(urlFont);
+        painter->setPen(m_pal.color(selected ? m_pal.accentText : m_pal.textMuted));
+        painter->drawText(QRect(x, r.top() + 8 + boldFm.height(), w, urlFm.height()),
+                          Qt::AlignVCenter | Qt::AlignLeft,
+                          urlFm.elidedText(subtitle, Qt::ElideMiddle, w));
+
+        painter->restore();
+    }
+
+private:
+    Palette m_pal;
+};
+
+class SidebarList : public QListWidget
+{
+    Q_OBJECT
+public:
+    explicit SidebarList(QWidget *parent = nullptr) : QListWidget(parent) {}
+
+signals:
+    void reorderRequested(int fromTab, int toTab);
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        m_pressPos = event->pos();
+        m_srcRow = -1;
+        m_dropGap = -1;
+        m_dragging = false;
+        QListWidgetItem *it = itemAt(event->pos());
+        if (it && it->data(Qt::UserRole).isValid() && (event->button() == Qt::LeftButton)) {
+            const int row = this->row(it);
+            if (event->pos().x() < viewport()->width() - 26)
+                m_srcRow = row;
+        }
+        QListWidget::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (!(event->buttons() & Qt::LeftButton)) {
+            QListWidget::mouseMoveEvent(event);
+            return;
+        }
+        if (!m_dragging) {
+            if (m_srcRow < 0)
+                return;
+            if ((event->pos() - m_pressPos).manhattanLength() < QApplication::startDragDistance())
+                return;
+            m_dragging = true;
+            setCursor(Qt::ClosedHandCursor);
+        }
+        const int gap = gapAt(event->pos());
+        if (gap != m_dropGap) {
+            m_dropGap = gap;
+            viewport()->update();
+        }
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        unsetCursor();
+        if (m_dragging) {
+            const int from = m_srcRow;
+            const int gap = m_dropGap;
+            m_dragging = false;
+            m_srcRow = -1;
+            m_dropGap = -1;
+            viewport()->update();
+            if (from >= 0 && gap >= 0) {
+                const int dest = gap > from ? gap - 1 : gap;
+                if (dest != from)
+                    emit reorderRequested(from, dest);
+            }
+            return;
+        }
+        QListWidget::mouseReleaseEvent(event);
+    }
+
+    void paintEvent(QPaintEvent *event) override
+    {
+        QListWidget::paintEvent(event);
+        if (!m_dragging || m_dropGap < 0)
+            return;
+        int y = -1;
+        const int tabCount = tabRowCount();
+        if (m_dropGap <= 0) {
+            if (tabCount > 0)
+                y = visualItemRect(item(0)).top();
+        } else if (m_dropGap >= tabCount) {
+            if (tabCount > 0)
+                y = visualItemRect(item(tabCount - 1)).bottom();
+        } else {
+            y = visualItemRect(item(m_dropGap)).top();
+        }
+        if (y < 0)
+            return;
+        QPainter p(viewport());
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor("#4ea1ff"));
+        p.drawRoundedRect(QRect(6, y - 2, viewport()->width() - 12, 4), 2, 2);
+    }
+
+private:
+    int tabRowCount() const
+    {
+        int n = 0;
+        for (int i = 0; i < count(); ++i) {
+            if (item(i) && item(i)->data(Qt::UserRole).isValid())
+                ++n;
+        }
+        return n;
+    }
+
+    int gapAt(const QPoint &pos) const
+    {
+        const int tabCount = tabRowCount();
+        QListWidgetItem *it = itemAt(pos);
+        if (!it)
+            return tabCount;
+        const int row = this->row(it);
+        if (row >= tabCount)
+            return tabCount;
+        const QRect r = visualItemRect(it);
+        return pos.y() > r.center().y() ? row + 1 : row;
+    }
+
+    QPoint m_pressPos;
+    int m_srcRow = -1;
+    int m_dropGap = -1;
+    bool m_dragging = false;
 };
 
 class HomeBridge : public QObject
@@ -336,40 +610,269 @@ class HomeBridge : public QObject
     Q_OBJECT
 
 public:
-    explicit HomeBridge(QObject *parent = nullptr) : QObject(parent) {}
+    explicit HomeBridge(QObject *parent = nullptr)
+        : QObject(parent)
+    {
+    }
+
+    // Página propietaria del puente. El puente solo responde si la página
+    // sigue mostrando contenido interno de Kinetix; así ninguna web externa
+    // que consiga el transporte puede invocar métodos nativos.
+    void setPage(QWebEnginePage *page) { m_page = page; }
+
+    bool isInternalOrigin() const
+    {
+        if (!m_page)
+            return false;
+        const QUrl u = m_page->url();
+        if (u.scheme() != QStringLiteral("kinetix"))
+            return false;
+        // Únicamente la portada interna (kinetix://inicio) puede usar el puente.
+        return u.adjusted(QUrl::NormalizePathSegments).toString()
+               == QStringLiteral("kinetix://inicio");
+    }
+
+    // Solo se aceptan URLs http/https para abrir desde el puente.
+    static QString sanitizeUrl(const QString &raw)
+    {
+        const QUrl u(raw.trimmed());
+        const QString scheme = u.scheme().toLower();
+        if (scheme != QStringLiteral("http") && scheme != QStringLiteral("https"))
+            return QString();
+        return u.toString();
+    }
 
 public slots:
-    void open(const QString &url) { emit openRequested(url); }
-    void edit(const QString &url) { emit editRequested(url); }
-    void remove(const QString &url) { emit removeRequested(url); }
+    void open(const QString &url)
+    {
+        if (!isInternalOrigin())
+            return;
+        const QString safe = sanitizeUrl(url);
+        if (!safe.isEmpty())
+            emit openRequested(safe);
+    }
+    void edit(const QString &url)
+    {
+        if (!isInternalOrigin())
+            return;
+        const QString safe = sanitizeUrl(url);
+        if (!safe.isEmpty())
+            emit editRequested(safe);
+    }
+    void remove(const QString &url)
+    {
+        if (!isInternalOrigin())
+            return;
+        const QString safe = sanitizeUrl(url);
+        if (!safe.isEmpty())
+            emit removeRequested(safe);
+    }
 
 signals:
     void openRequested(const QString &url);
     void editRequested(const QString &url);
     void removeRequested(const QString &url);
+
+private:
+    QWebEnginePage *m_page = nullptr;
+};
+
+class PdfViewerTab : public QWidget
+{
+    Q_OBJECT
+
+public:
+    explicit PdfViewerTab(const QString &path, QWidget *parent = nullptr)
+        : QWidget(parent)
+        , m_doc(new QPdfDocument(this))
+        , m_view(new QPdfView(this))
+        , m_path(path)
+    {
+        m_title = QFileInfo(path).fileName();
+        if (m_title.isEmpty())
+            m_title = QStringLiteral("PDF");
+
+        m_view->setObjectName(QStringLiteral("pdfView"));
+        m_view->setPageMode(QPdfView::PageMode::SinglePage);
+        m_view->setZoomMode(QPdfView::ZoomMode::FitInView);
+        m_view->setDocument(m_doc);
+
+        auto *bar = new QWidget(this);
+        bar->setObjectName(QStringLiteral("pdfToolbar"));
+        auto *h = new QHBoxLayout(bar);
+        h->setContentsMargins(8, 4, 8, 4);
+        h->setSpacing(4);
+
+        auto mkBtn = [&](const QString &text, const QString &tip) {
+            auto *b = new QToolButton(bar);
+            b->setText(text);
+            b->setToolTip(tip);
+            b->setFocusPolicy(Qt::NoFocus);
+            b->setCursor(Qt::PointingHandCursor);
+            return b;
+        };
+
+        auto *prev = mkBtn(QStringLiteral("‹"), QStringLiteral("Página anterior"));
+        auto *next = mkBtn(QStringLiteral("›"), QStringLiteral("Página siguiente"));
+        auto *zoomOut = mkBtn(QStringLiteral("−"), QStringLiteral("Alejar"));
+        auto *zoomIn = mkBtn(QStringLiteral("+"), QStringLiteral("Acercar"));
+        auto *zoomFit = mkBtn(QStringLiteral("⤢"), QStringLiteral("Ajustar a la ventana"));
+
+        m_pageLabel = new QLabel(bar);
+        m_pageLabel->setMinimumWidth(90);
+        m_pageLabel->setAlignment(Qt::AlignCenter);
+
+        h->addWidget(prev);
+        h->addWidget(next);
+        h->addWidget(m_pageLabel, 1);
+        h->addWidget(zoomOut);
+        h->addWidget(zoomIn);
+        h->addWidget(zoomFit);
+
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+        layout->addWidget(bar);
+        layout->addWidget(m_view, 1);
+        setLayout(layout);
+
+        auto *nav = m_view->pageNavigator();
+        connect(prev, &QToolButton::clicked, this, [this, nav]() {
+            const int page = nav->currentPage();
+            if (page > 0)
+                nav->jump(page - 1, QPointF());
+        });
+        connect(next, &QToolButton::clicked, this, [this, nav]() {
+            const int page = nav->currentPage();
+            if (page + 1 < m_doc->pageCount())
+                nav->jump(page + 1, QPointF());
+        });
+        connect(zoomIn, &QToolButton::clicked, this, [this]() { applyZoom(1.25); });
+        connect(zoomOut, &QToolButton::clicked, this, [this]() { applyZoom(0.8); });
+        connect(zoomFit, &QToolButton::clicked, this, [this]() {
+            m_view->setZoomMode(QPdfView::ZoomMode::FitInView);
+        });
+        connect(nav, &QPdfPageNavigator::currentPageChanged, this, [this]() { updateLabel(); });
+        connect(m_doc, &QPdfDocument::pageCountChanged, this, [this]() { updateLabel(); });
+
+        m_doc->load(path);
+        updateLabel();
+    }
+
+    QString title() const { return m_title; }
+    QString filePath() const { return m_path; }
+
+private:
+    void applyZoom(double factor)
+    {
+        m_view->setZoomMode(QPdfView::ZoomMode::Custom);
+        m_view->setZoomFactor(qBound(0.1, m_view->zoomFactor() * factor, 8.0));
+    }
+
+    void updateLabel()
+    {
+        const int count = m_doc->pageCount();
+        if (count <= 0) {
+            m_pageLabel->setText(QStringLiteral("Cargando…"));
+            return;
+        }
+        const int current = m_view->pageNavigator()->currentPage() + 1;
+        m_pageLabel->setText(QStringLiteral("%1 / %2").arg(current).arg(count));
+    }
+
+    QPdfDocument *m_doc;
+    QPdfView *m_view;
+    QLabel *m_pageLabel = nullptr;
+    QString m_path;
+    QString m_title;
 };
 
 namespace {
 constexpr int kHistoryLimit = 300;
 
-const char kSpoofedUA[] = "Mozilla/5.0 (Windows NT 6.2; Win64; x64) AppleWebKit/537.36 "
-                          "(KHTML, like Gecko) Chrome/126.0.6478.127 Kinetix/1.0 Safari/537.36";
-const char kSecChUa[] = "\"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\", \"Not.A/Brand\";v=\"24\"";
-
-class HeaderInterceptor : public QWebEngineUrlRequestInterceptor
+// Token "Windows NT x.y" correspondiente al sistema real. La plantilla de UA
+// que trae Qt declara 6.2 (Windows 8) incluso en Windows 10/11.
+QString windowsNtToken()
 {
-public:
-    void interceptRequest(QWebEngineUrlRequestInfo &info) override
-    {
-        const QString host = info.requestUrl().host();
-        if (!host.contains(QStringLiteral("whatsapp"), Qt::CaseInsensitive))
-            return;
-        info.setHttpHeader(QByteArrayLiteral("User-Agent"), QByteArrayLiteral(kSpoofedUA));
-        info.setHttpHeader(QByteArrayLiteral("sec-ch-ua"), QByteArrayLiteral(kSecChUa));
-        info.setHttpHeader(QByteArrayLiteral("sec-ch-ua-mobile"), QByteArrayLiteral("?0"));
-        info.setHttpHeader(QByteArrayLiteral("sec-ch-ua-platform"), QByteArrayLiteral("\"Windows\""));
+#if defined(Q_OS_WIN)
+    // QSysInfo::productVersion() devuelve "11", "10", "8.1", "8", "7"...
+    const QString v = QSysInfo::productVersion();
+    if (v.startsWith(QStringLiteral("11")) || v.startsWith(QStringLiteral("10")))
+        return QStringLiteral("10.0");
+    if (v.startsWith(QStringLiteral("8.1")))
+        return QStringLiteral("6.3");
+    if (v.startsWith(QStringLiteral("8")))
+        return QStringLiteral("6.2");
+    if (v.startsWith(QStringLiteral("7")))
+        return QStringLiteral("6.1");
+    // Vista/XP u otra versión: se deja el token por defecto de Qt.
+    return QStringLiteral("6.2");
+#else
+    return QStringLiteral("10.0");
+#endif
+}
+
+// Compara dos versiones "mayor.menor.build.parche" numéricamente.
+// Devuelve true si "a" es estrictamente más reciente que "b".
+bool isNewerVersion(const QString &a, const QString &b)
+{
+    const QStringList pa = a.split(QLatin1Char('.'));
+    const QStringList pb = b.split(QLatin1Char('.'));
+    const int n = qMax(pa.size(), pb.size());
+    for (int i = 0; i < n; ++i) {
+        const int va = i < pa.size() ? pa.at(i).toInt() : 0;
+        const int vb = i < pb.size() ? pb.at(i).toInt() : 0;
+        if (va != vb)
+            return va > vb;
     }
-};
+    return false;
+}
+
+// Limpia un nombre de archivo propuesto por el servidor para que no pueda
+// escapar del directorio de descargas ni sobrescribir archivos del sistema.
+QString sanitizeDownloadFileName(QString name)
+{
+    name = name.trimmed();
+
+    // Se queda solo con la última componente del nombre, nunca con la ruta.
+    const QStringList separators{QStringLiteral("\\"), QStringLiteral("/")};
+    for (const QString &sep : separators)
+        name = name.section(sep, -1, -1);
+
+    // Elimina caracteres no imprimibles y los reservados de Windows.
+    static const QRegularExpression badChars(QStringLiteral("[\\x00-\\x1f<>:\"|?*]"));
+    name.remove(badChars);
+    name.remove(QLatin1Char('~'));
+
+    // Rechaza nombres sin contenido útil o que intenten subir de nivel.
+    while (name.startsWith(QLatin1Char('.')))
+        name.remove(0, 1);
+    name = name.trimmed();
+    if (name.isEmpty())
+        return QString();
+    if (name.contains(QStringLiteral(".."), Qt::CaseInsensitive))
+        return QString();
+
+    // Evita los nombres reservados de Windows (CON, PRN, AUX, NUL, COM1..9).
+    static const QStringList reserved{
+        QStringLiteral("CON"), QStringLiteral("PRN"), QStringLiteral("AUX"),
+        QStringLiteral("NUL"),
+        QStringLiteral("COM1"), QStringLiteral("COM2"), QStringLiteral("COM3"),
+        QStringLiteral("COM4"), QStringLiteral("COM5"), QStringLiteral("COM6"),
+        QStringLiteral("COM7"), QStringLiteral("COM8"), QStringLiteral("COM9"),
+        QStringLiteral("LPT1"), QStringLiteral("LPT2"), QStringLiteral("LPT3"),
+        QStringLiteral("LPT4"), QStringLiteral("LPT5"), QStringLiteral("LPT6"),
+        QStringLiteral("LPT7"), QStringLiteral("LPT8"), QStringLiteral("LPT9")};
+    const QString stem = name.section(QLatin1Char('.'), 0, 0);
+    if (reserved.contains(stem, Qt::CaseInsensitive))
+        return QStringLiteral("descarga_") + name;
+
+    // Longitud razonable (Windows limita a 255 bytes por componente).
+    if (name.toUtf8().size() > 200)
+        name = QString::fromUtf8(name.toUtf8().left(120));
+
+    return name;
+}
 
 QPixmap makeSpinnerIcon(int angle, int size)
 {
@@ -415,7 +918,7 @@ QPixmap makeDownloadIcon(int angle, bool dark, double frac)
 }
 }
 
-MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent)
+MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent, bool privateMode)
     : QMainWindow(parent)
     , m_tabs(new TabsWidget(this))
     , m_urlInput(new QLineEdit(this))
@@ -428,7 +931,7 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent)
     , m_btnMenu(new QPushButton(this))
     , m_btnDownloads(new QToolButton(this))
     , m_spinTimer(new QTimer(this))
-    , m_tabsSidebar(new QListWidget(this))
+    , m_tabsSidebar(new SidebarList(this))
     , m_tabsSidebarPanel(nullptr)
     , m_bookmarkBar(nullptr)
     , m_bookmarkBarLayout(nullptr)
@@ -447,21 +950,55 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent)
     , m_searchEngine(m_settings->value(QStringLiteral("busqueda/motor"), QStringLiteral("Google")).toString())
     , m_saveTimer(new QTimer(this))
     , m_wasMaximized(false)
+    , m_privateMode(privateMode)
 {
-    setWindowTitle(QStringLiteral("Kinetix"));
+    setWindowTitle(m_privateMode ? QStringLiteral("Kinetix (privada)") : QStringLiteral("Kinetix"));
+    if (m_privateMode)
+        setAttribute(Qt::WA_DeleteOnClose);
     setMinimumSize(900, 600);
     installEventFilter(this);
     qApp->installEventFilter(this);
 
+    statusBar()->setSizeGripEnabled(false);
+    statusBar()->hide();
+    connect(statusBar(), &QStatusBar::messageChanged, this, [this]() { updateStatusBarVisibility(); });
+
     QWebEngineProfile *prof = profile ? profile : QWebEngineProfile::defaultProfile();
 
+    // Identificación del motor real. Nunca se anuncia una versión de Chrome
+    // distinta de la que lleva Qt WebEngine: eso engaña al servidor y al
+    // usuario, y puede ocultar que el motor va por detrás en parches.
+    const QString chromiumVersion = QString::fromLatin1(qWebEngineChromiumVersion());
     QString userAgent = prof->httpUserAgent();
     userAgent.remove(QRegularExpression(QStringLiteral("\\s*QtWebEngine/[^\\s]+")));
-    userAgent.replace(QRegularExpression(QStringLiteral("Chrome/\\d+(\\.\\d+)+")),
-                      QStringLiteral("Chrome/126.0.6478.127"));
+    // Token de plataforma real: la plantilla por defecto de Qt declara
+    // "Windows NT 6.2" (Windows 8) incluso en Windows 10/11.
+    userAgent.replace(QRegularExpression(QStringLiteral("Windows NT \\d+\\.\\d+")),
+                      QStringLiteral("Windows NT %1").arg(windowsNtToken()));
+    if (!chromiumVersion.isEmpty()) {
+        const QString patchVersion = QString::fromLatin1(qWebEngineChromiumSecurityPatchVersion());
+        // Si hay parches de seguridad posteriores, se anuncian; si no, la base.
+        const QString effective = (!patchVersion.isEmpty() && isNewerVersion(patchVersion, chromiumVersion))
+                                  ? patchVersion : chromiumVersion;
+        userAgent.replace(QRegularExpression(QStringLiteral("Chrome/\\d+(\\.\\d+)+")),
+                          QStringLiteral("Chrome/%1").arg(effective));
+    }
+    // Identidad honesta: se declara Kinetix y su versión real.
     userAgent.replace(QStringLiteral("Safari/537.36"),
-                      QStringLiteral("Kinetix/1.0 Safari/537.36"));
+                      QStringLiteral("Kinetix/%1 Safari/537.36").arg(qApp->applicationVersion()));
     prof->setHttpUserAgent(userAgent);
+
+    // Modo compatibilidad opcional (desactivado por defecto): algunos sitios
+    // antiguos se niegan a funcionar si no ven "Chrome" exactamente.
+    const bool compatMode = m_settings->value("avanzado/ua_compat_chrome", false).toBool();
+    if (compatMode && !chromiumVersion.isEmpty()) {
+        const QString patchVersion = QString::fromLatin1(qWebEngineChromiumSecurityPatchVersion());
+        const QString effective = (!patchVersion.isEmpty() && isNewerVersion(patchVersion, chromiumVersion))
+                                  ? patchVersion : chromiumVersion;
+        prof->setHttpUserAgent(QStringLiteral(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/%1 Safari/537.36").arg(effective));
+    }
 
     connect(prof, &QWebEngineProfile::downloadRequested, this,
             &MainWindow::handleDownloadRequested);
@@ -473,20 +1010,52 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent)
 
     connect(m_spinTimer, &QTimer::timeout, this, &MainWindow::tickSpinners);
 
+    // User-Agent Client Hints coherentes con la versión real del motor.
+    const QString hintVersion = [&]() {
+        const QRegularExpression re(QStringLiteral("Chrome/(\\d+)(\\.\\d+)*"));
+        const auto m = re.match(prof->httpUserAgent());
+        return m.hasMatch() ? m.captured(1) : QString();
+    }();
+
+    // Diagnóstico de identidad: con KINETIX_DEBUG_UA=1 se vuelca la versión
+    // real del motor y el User-Agent resultante, para poder comprobar que no
+    // se anuncia una versión de Chrome que no corresponda al motor real.
+    if (qEnvironmentVariableIsSet("KINETIX_DEBUG_UA")) {
+        QFile dbg(QDir::homePath() + "/.navegador_personal/debug_ua.txt");
+        if (dbg.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream s(&dbg);
+            s << "chromiumVersion=" << qWebEngineChromiumVersion() << "\n";
+            if (const char *pv = qWebEngineChromiumSecurityPatchVersion())
+                s << "securityPatch=" << pv << "\n";
+            s << "compatMode=" << (compatMode ? 1 : 0) << "\n";
+            s << "httpUserAgent=" << prof->httpUserAgent() << "\n";
+            s << "hintMajor=" << hintVersion << "\n";
+            dbg.close();
+        }
+    }
+
     QWebEngineScript uaSpoof;
     uaSpoof.setName(QStringLiteral("kinetix-ua"));
     uaSpoof.setInjectionPoint(QWebEngineScript::DocumentCreation);
     uaSpoof.setWorldId(QWebEngineScript::MainWorld);
     uaSpoof.setRunsOnSubFrames(true);
-    uaSpoof.setSourceCode(
-        QStringLiteral(R"JS(
+    uaSpoof.setSourceCode(QStringLiteral(R"JS(
 (() => {
-  const brands = [
-    { brand: 'Chromium', version: '126' },
-    { brand: 'Google Chrome', version: '126' },
-    { brand: 'Not/A)Brand', version: '8' }
-  ];
-  const full = brands.map((b) => ({ brand: b.brand, version: '126.0.6478.127' }));
+  const ver = "%1";
+  const fullVer = "%2";
+  const compat = %3;
+  const brands = compat
+    ? [
+        { brand: 'Chromium', version: ver },
+        { brand: 'Google Chrome', version: ver },
+        { brand: 'Not/A)Brand', version: '8' }
+      ]
+    : [
+        { brand: 'Chromium', version: ver },
+        { brand: 'Not/A)Brand', version: '8' },
+        { brand: 'Kinetix', version: ver }
+      ];
+  const full = brands.map((b) => ({ brand: b.brand, version: fullVer }));
   const meta = {
     brands: brands,
     mobile: false,
@@ -495,14 +1064,13 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent)
     bitness: '64',
     model: '',
     platformVersion: '10.0.0',
-    uaFullVersion: '126.0.6478.127',
+    uaFullVersion: fullVer,
     fullVersionList: full,
     getHighEntropyValues() {
       return Promise.resolve({
         architecture: 'x86', bitness: '64', brands: brands,
-        fullVersionList: full, model: '', platform: 'Windows',
-        platformVersion: '10.0.0', uaFullVersion: '126.0.6478.127',
-        wow64: false, mobile: false
+        fullVersionList: full, model: '', mobile: false, platform: 'Windows',
+        platformVersion: '10.0.0', uaFullVersion: fullVer, wow64: false
       });
     },
     toJSON() { return meta; }
@@ -521,10 +1089,99 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent)
     } catch (err2) {}
   }
 })();
-)JS"));
+)JS").arg(hintVersion, chromiumVersion, compatMode ? QStringLiteral("true") : QStringLiteral("false")));
     prof->scripts()->insert(uaSpoof);
 
-    prof->setUrlRequestInterceptor(new HeaderInterceptor);
+    // La API de pantalla completa viene DESACTIVADA por defecto en Qt WebEngine.
+    // Sin activarla aquí, la página no llega a emitir fullScreenRequested y el
+    // botón de pantalla completa de los vídeos (YouTube, etc.) no hace nada.
+    prof->settings()->setAttribute(QWebEngineSettings::FullScreenSupportEnabled, true);
+
+    // Optimización de vídeo "ligero": en páginas con vídeos que arrancan solos
+    // (típicas de portales de noticias), pausa los que están en silencio y
+    // fuera de pantalla, y evita descargar los que no se usan. Reduce CPU y
+    // datos sin tocar los vídeos que el usuario inicia a propósito. Se puede
+    // desactivar en Configuración ▸ Rendimiento.
+    if (m_settings->value(QStringLiteral("rendimiento/video_ligero"), false).toBool()) {
+        QWebEngineScript videoLight;
+        videoLight.setName(QStringLiteral("kinetix-video-light"));
+        videoLight.setInjectionPoint(QWebEngineScript::DocumentReady);
+        videoLight.setWorldId(QWebEngineScript::MainWorld);
+        videoLight.setRunsOnSubFrames(false);
+        videoLight.setSourceCode(QStringLiteral(R"JS(
+(() => {
+  if (window.__kinetixVideoLight) return;
+  window.__kinetixVideoLight = true;
+  var userActed = false;
+  function resumeAll() {
+    var vs = document.querySelectorAll('video[data-kp="1"]');
+    for (var i = 0; i < vs.length; i++) {
+      vs[i].removeAttribute('data-kp');
+      try { vs[i].play().catch(function () {}); } catch (e) {}
+    }
+  }
+  // En cuanto el usuario interactúa con la página, todo lo que haya pausado
+  // el optimizador se reanuda y deja de intervenir: su reproducción manda.
+  ['pointerdown','keydown','touchstart'].forEach(function (ev) {
+    window.addEventListener(ev, function () {
+      if (userActed) return;
+      userActed = true;
+      resumeAll();
+    }, { once: true, capture: true });
+  });
+  // Se pausan solo vídeos silenciados que llevan 2 s completamente fuera de
+  // pantalla. El retardo evita parpadeos cuando el diseño cambia de tamaño y
+  // un vídeo entra y sale de pantalla muy deprisa.
+  var io = ('IntersectionObserver' in window)
+    ? new IntersectionObserver(function (entries) {
+        if (userActed) return;
+        entries.forEach(function (e) {
+          var v = e.target;
+          if (e.isIntersecting) {
+            if (v._kpT) { clearTimeout(v._kpT); v._kpT = 0; }
+            if (v.getAttribute('data-kp') === '1') {
+              v.removeAttribute('data-kp');
+              try { v.play().catch(function () {}); } catch (err) {}
+            }
+            return;
+          }
+          if (!v.muted || v.paused || v.ended || v._kpT) return;
+          v._kpT = setTimeout(function () {
+            v._kpT = 0;
+            if (userActed || v.paused || !v.muted || v.ended) return;
+            var r = v.getBoundingClientRect();
+            if (r.bottom <= 0 || r.top >= (window.innerHeight || 0)) {
+              v.setAttribute('data-kp', '1');
+              try { v.pause(); } catch (err) {}
+            }
+          }, 2000);
+        });
+      }, { threshold: 0 })
+    : null;
+  function attach(v) {
+    if (v.dataset.kinetixVid) return;
+    v.dataset.kinetixVid = '1';
+    if (io) io.observe(v);
+  }
+  function scan() {
+    var vids = document.getElementsByTagName('video');
+    for (var i = 0; i < vids.length; i++) attach(vids[i]);
+  }
+  scan();
+  document.addEventListener('play', function (e) {
+    if (e.target && e.target.tagName === 'VIDEO') attach(e.target);
+  }, true);
+  // Reintentos pocos y espaciados en lugar de observar el DOM completo:
+  // en páginas que cambian mucho (YouTube) eso consumía CPU sin parar.
+  [1000, 3000, 8000, 20000].forEach(function (ms) { setTimeout(scan, ms); });
+})();
+)JS"));
+        prof->scripts()->insert(videoLight);
+    }
+
+    // El script de detección de enlaces se instala por página (KinetixPage)
+    // con un nonce aleatorio, para que ninguna web pueda falsificar la URL
+    // que se muestra en la burbuja de estado.
 
     m_saveTimer->setSingleShot(true);
     m_saveTimer->setInterval(1500);
@@ -567,6 +1224,62 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent)
     updateTabsSidebar();
 
     setWindowState(Qt::WindowMaximized);
+
+    m_updateChecker = new UpdateChecker(this);
+
+    m_faviconNet = new QNetworkAccessManager(this);
+    connect(m_faviconNet, &QNetworkAccessManager::finished, this,
+            [this](QNetworkReply *reply) {
+                const QString pageUrl = reply->request().attribute(QNetworkRequest::User).toString();
+                if (reply->error() == QNetworkReply::NoError) {
+                    const QByteArray ba = reply->readAll();
+                    QImage img;
+                    img.loadFromData(ba);
+                    if (!img.isNull()) {
+                        QImage out = img.scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                        const QString path = QDir::homePath() + QStringLiteral("/.navegador_personal/iconos/") + hashUrlForIcon(pageUrl);
+                        out.save(path, "PNG");
+                        refreshHomeTabs();
+                    }
+                }
+                m_faviconFetched.remove(pageUrl);
+                reply->deleteLater();
+            });
+
+    connect(m_updateChecker, &UpdateChecker::latestRelease, this,
+            [this](const QString &version, const QString &notes, const QString &url) {
+        m_latestVersion = version;
+        m_latestNotes = notes;
+        m_latestUrl = url;
+        if (m_pendingNotesView) {
+            m_pendingNotesView = false;
+            m_updateCheckManual = false;
+            showReleaseNotes(version, notes, url);
+            return;
+        }
+        if (!m_updateCheckManual) {
+            if (UpdateChecker::compareVersions(version, QCoreApplication::applicationVersion()) > 0)
+                showAvailableUpdate(version, notes, url);
+            return;
+        }
+        m_updateCheckManual = false;
+        if (UpdateChecker::compareVersions(version, QCoreApplication::applicationVersion()) > 0)
+            showAvailableUpdate(version, notes, url);
+        else
+            QMessageBox::information(this, tr("Buscar actualizaciones"),
+                tr("Estás usando la última versión de Kinetix (%1).").arg(m_latestVersion));
+    });
+    connect(m_updateChecker, &UpdateChecker::checkFailed, this, [this](const QString &error) {
+        const bool wasManual = m_updateCheckManual || m_pendingNotesView;
+        m_updateCheckManual = false;
+        m_pendingNotesView = false;
+        if (wasManual)
+            QMessageBox::warning(this, tr("Buscar actualizaciones"),
+                tr("No se pudo comprobar si hay actualizaciones.\n\n%1").arg(error));
+    });
+
+    if (!m_privateMode)
+        QTimer::singleShot(3000, this, [this]() { checkForUpdates(false); });
 }
 
 MainWindow::~MainWindow() = default;
@@ -583,15 +1296,19 @@ void MainWindow::closeEvent(QCloseEvent *event)
         }
     }
 
-    m_settings->setValue(QStringLiteral("ventana/geometry"), saveGeometry());
-    m_settings->setValue(QStringLiteral("ventana/splitter"), m_splitter->saveState());
-    m_settings->setValue(QStringLiteral("apariencia/modo_oscuro"), m_darkMode);
-    m_settings->setValue(QStringLiteral("apariencia/barra_marcadores"), m_showBookmarkBar);
-    m_settings->setValue(QStringLiteral("apariencia/pestanas_laterales"), m_showTabsSidebar);
-    m_settings->setValue(QStringLiteral("busqueda/motor"), m_searchEngine);
-    saveHistory();
-    saveDownloadHistory();
-    m_settings->sync();
+    // Una ventana privada no deja rastro: no guarda geometría ni ajustes
+    // globales, para no pisar los de la ventana normal.
+    if (!m_privateMode) {
+        m_settings->setValue(QStringLiteral("ventana/geometry"), saveGeometry());
+        m_settings->setValue(QStringLiteral("ventana/splitter"), m_splitter->saveState());
+        m_settings->setValue(QStringLiteral("apariencia/modo_oscuro"), m_darkMode);
+        m_settings->setValue(QStringLiteral("apariencia/barra_marcadores"), m_showBookmarkBar);
+        m_settings->setValue(QStringLiteral("apariencia/pestanas_laterales"), m_showTabsSidebar);
+        m_settings->setValue(QStringLiteral("busqueda/motor"), m_searchEngine);
+        saveHistory();
+        saveDownloadHistory();
+        m_settings->sync();
+    }
     event->accept();
 }
 
@@ -608,6 +1325,11 @@ void MainWindow::createWidgets()
     m_urlInput->setMinimumWidth(320);
     m_urlInput->setFixedHeight(34);
     connect(m_urlInput, &QLineEdit::returnPressed, this, &MainWindow::loadUrl);
+
+    m_lockAction = m_urlInput->addAction(makeLockIcon(QStringLiteral(""), m_darkMode), QLineEdit::LeadingPosition);
+    m_lockAction->setToolTip(QStringLiteral("Kinetix"));
+    if (QWidget *lockBtn = m_urlInput->findChild<QToolButton *>())
+        lockBtn->setCursor(Qt::ArrowCursor);
 
     m_btnBack->setEnabled(false);
     m_btnForward->setEnabled(false);
@@ -670,6 +1392,7 @@ void MainWindow::createWidgets()
     m_tabsSidebar->setStyleSheet(QStringLiteral("QListWidget::item { border: 0; outline: 0; }"));
     m_tabsSidebar->setSelectionMode(QAbstractItemView::NoSelection);
     m_tabsSidebar->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_tabsSidebar, &SidebarList::reorderRequested, this, &MainWindow::moveTab);
     connect(m_tabsSidebar, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
         if (!item) return;
         bool ok = false;
@@ -724,13 +1447,34 @@ void MainWindow::createShortcuts()
     };
 
     addSc(QKeySequence(Qt::CTRL | Qt::Key_T), [this]() { newTab(); });
+    addSc(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N), [this]() { openPrivateWindow(); });
+    addSc(QKeySequence(Qt::SHIFT | Qt::Key_Escape), [this]() { showTaskManager(); });
     addSc(QKeySequence(Qt::CTRL | Qt::Key_W), [this]() { closeTab(m_tabs->currentIndex()); });
     addSc(QKeySequence(Qt::CTRL | Qt::Key_R), [this]() { reload(); });
     addSc(QKeySequence(Qt::ALT | Qt::Key_Left), [this]() { goBack(); });
     addSc(QKeySequence(Qt::ALT | Qt::Key_Right), [this]() { goForward(); });
     addSc(QKeySequence(Qt::CTRL | Qt::Key_L), [this]() { m_urlInput->setFocus(); });
     addSc(QKeySequence(Qt::Key_F11), [this]() { toggleFullscreen(); });
-    addSc(QKeySequence(Qt::Key_Escape), [this]() { exitFullscreen(); });
+    addSc(QKeySequence(Qt::Key_Escape), [this]() {
+        if (m_findBar && m_findBar->isVisible()) {
+            hideFindBar();
+            return;
+        }
+        // Si la pantalla completa la pidió una web (vídeo de YouTube, etc.),
+        // hay que salir por la propia página para que ella también se entere;
+        // si no, se quedaría en modo pantalla completa sin poder salir.
+        if (m_webFullscreenPage) {
+            m_webFullscreenPage->runJavaScript(
+                QStringLiteral("document.fullscreenElement && document.exitFullscreen()"));
+            return;
+        }
+        exitFullscreen();
+    });
+    addSc(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T), [this]() { reopenClosedTab(); });
+    addSc(QKeySequence(Qt::CTRL | Qt::Key_F), [this]() { showFindBar(); });
+    addSc(QKeySequence(Qt::Key_F3), [this]() { findNext(true); });
+    addSc(QKeySequence(Qt::CTRL | Qt::Key_G), [this]() { findNext(true); });
+    addSc(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_G), [this]() { findNext(false); });
     addSc(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_E), [this]() { openCodeEditor(); });
     addSc(QKeySequence(Qt::CTRL | Qt::Key_D), [this]() { addBookmarkFromCurrent(); });
     addSc(QKeySequence(Qt::CTRL | Qt::Key_P), [this]() { savePdf(); });
@@ -749,6 +1493,7 @@ void MainWindow::createLayout()
     auto *newTabBar = new NewTabBar(m_tabs);
     connect(newTabBar, &NewTabBar::newTabRequested, this, [this]() { newTab(); });
     connect(newTabBar, &NewTabBar::closeRequested, this, &MainWindow::closeTab);
+    connect(newTabBar, &NewTabBar::tabMoveRequested, this, &MainWindow::moveTab);
     static_cast<TabsWidget *>(m_tabs)->installTabBar(newTabBar);
     m_tabs->tabBar()->setVisible(!m_showTabsSidebar);
 
@@ -840,6 +1585,295 @@ void MainWindow::createLayout()
     });
     m_zoomBadge->hide();
     m_zoomBadge->installEventFilter(this);
+
+    m_linkBubble = new QLabel(m_tabs);
+    m_linkBubble->setObjectName(QStringLiteral("linkBubble"));
+    m_linkBubble->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_linkBubble->setTextInteractionFlags(Qt::NoTextInteraction);
+    m_linkBubble->hide();
+    m_linkBubble->installEventFilter(this);
+
+    createFindBar();
+}
+
+void MainWindow::createFindBar()
+{
+    m_findBar = new QWidget(m_tabs);
+    m_findBar->setObjectName(QStringLiteral("findBar"));
+    auto *h = new QHBoxLayout(m_findBar);
+    h->setContentsMargins(8, 4, 8, 4);
+    h->setSpacing(4);
+
+    m_findInput = new QLineEdit(m_findBar);
+    m_findInput->setPlaceholderText(QStringLiteral("Buscar en la página…"));
+    m_findInput->setFixedWidth(220);
+    m_findInput->setClearButtonEnabled(true);
+
+    m_findCount = new QLabel(QStringLiteral("0/0"), m_findBar);
+    m_findCount->setObjectName(QStringLiteral("findCount"));
+    m_findCount->setMinimumWidth(52);
+    m_findCount->setAlignment(Qt::AlignCenter);
+
+    auto mkBtn = [&](const QString &text, const QString &tip) {
+        auto *b = new QToolButton(m_findBar);
+        b->setText(text);
+        b->setToolTip(tip);
+        b->setFocusPolicy(Qt::NoFocus);
+        b->setCursor(Qt::PointingHandCursor);
+        return b;
+    };
+    auto *prev = mkBtn(QStringLiteral("‹"), QStringLiteral("Anterior (Mayús+Intro)"));
+    auto *next = mkBtn(QStringLiteral("›"), QStringLiteral("Siguiente (Intro)"));
+    auto *closeBtn = mkBtn(QStringLiteral("✕"), QStringLiteral("Cerrar (Esc)"));
+
+    h->addWidget(m_findInput);
+    h->addWidget(m_findCount);
+    h->addWidget(prev);
+    h->addWidget(next);
+    h->addWidget(closeBtn);
+    m_findBar->setLayout(h);
+    m_findBar->setFixedHeight(42);
+    m_findBar->hide();
+
+    connect(m_findInput, &QLineEdit::textChanged, this, [this]() { findNext(true); });
+    connect(m_findInput, &QLineEdit::returnPressed, this, [this]() {
+        const bool back = QApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
+        findNext(!back);
+    });
+    connect(next, &QToolButton::clicked, this, [this]() { findNext(true); });
+    connect(prev, &QToolButton::clicked, this, [this]() { findNext(false); });
+    connect(closeBtn, &QToolButton::clicked, this, [this]() { hideFindBar(); });
+}
+
+void MainWindow::positionFindBar()
+{
+    if (!m_findBar || !m_tabs)
+        return;
+    const int w = m_findBar->sizeHint().width();
+    m_findBar->setFixedWidth(w);
+    const int x = m_tabs->width() - w - 14;
+    const int y = m_tabs->height() - m_findBar->height() - 14;
+    m_findBar->move(qMax(8, x), qMax(8, y));
+}
+
+void MainWindow::showFindBar()
+{
+    if (!m_findBar)
+        createFindBar();
+    m_findBar->show();
+    m_findBar->raise();
+    positionFindBar();
+    m_findInput->setFocus();
+    m_findInput->selectAll();
+    if (!m_findInput->text().isEmpty())
+        findNext(true);
+}
+
+void MainWindow::hideFindBar()
+{
+    if (m_findBar)
+        m_findBar->hide();
+    BrowserTab *tab = qobject_cast<BrowserTab *>(m_tabs->currentWidget());
+    if (tab)
+        tab->webView()->page()->findText(QString());
+    if (m_findCount)
+        m_findCount->setText(QStringLiteral("0/0"));
+}
+
+void MainWindow::findNext(bool forward)
+{
+    if (!m_findBar || !m_findBar->isVisible())
+        return;
+    BrowserTab *tab = qobject_cast<BrowserTab *>(m_tabs->currentWidget());
+    if (!tab)
+        return;
+    const QString text = m_findInput->text();
+    if (text.isEmpty()) {
+        if (m_findCount)
+            m_findCount->setText(QStringLiteral("0/0"));
+        tab->webView()->page()->findText(QString());
+        return;
+    }
+    QWebEnginePage::FindFlags flags;
+    if (!forward)
+        flags |= QWebEnginePage::FindBackward;
+    tab->webView()->page()->findText(text, flags);
+}
+
+void MainWindow::reopenClosedTab()
+{
+    if (m_closedTabs.isEmpty())
+        return;
+    const QVariantMap entry = m_closedTabs.takeFirst();
+    const QString url = entry.value(QStringLiteral("url")).toString();
+    if (!url.isEmpty())
+        newTab(url);
+}
+
+void MainWindow::fetchHighResFavicon(const QString &pageUrl)
+{
+    if (pageUrl.isEmpty() || !pageUrl.startsWith(QStringLiteral("http"))) return;
+    if (m_faviconFetched.contains(pageUrl)) return;
+    m_faviconFetched.insert(pageUrl);
+    QNetworkRequest req(QUrl(QStringLiteral("https://www.google.com/s2/favicons?domain_url=%1&sz=64").arg(pageUrl)));
+    req.setAttribute(QNetworkRequest::User, pageUrl);
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Mozilla/5.0"));
+    m_faviconNet->get(req);
+}
+
+void MainWindow::refreshHomeTabs()
+{
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        if (auto *t = qobject_cast<BrowserTab *>(m_tabs->widget(i))) {
+            if (t->webView()->url().toString() == QStringLiteral("kinetix://inicio"))
+                t->webView()->setHtml(buildHomePage(), QUrl(QStringLiteral("kinetix://inicio")));
+        }
+    }
+}
+
+void MainWindow::moveTab(int from, int to)
+{
+    const int n = m_tabs->count();
+    if (from == to || from < 0 || to < 0 || from >= n || to >= n)
+        return;
+
+    QWidget *widget = m_tabs->widget(from);
+    if (!widget)
+        return;
+
+    QWidget *current = m_tabs->currentWidget();
+    const QString text = m_tabs->tabText(from);
+    const QIcon icon = m_tabs->tabIcon(from);
+    const QString tip = m_tabs->tabToolTip(from);
+
+    QSignalBlocker blocker(m_tabs);
+    m_tabs->removeTab(from);
+    const int inserted = m_tabs->insertTab(to, widget, icon, text);
+    m_tabs->setTabToolTip(inserted, tip);
+    if (current) {
+        const int ci = m_tabs->indexOf(current);
+        if (ci >= 0)
+            m_tabs->setCurrentIndex(ci);
+    }
+    blocker.unblock();
+
+    updateTabsSidebar();
+    refreshTabLoading();
+}
+
+void MainWindow::openPdfInViewer(const QString &path)
+{
+    if (path.isEmpty())
+        return;
+    if (!QFile::exists(path)) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        return;
+    }
+    auto *viewer = new PdfViewerTab(path, this);
+    const int index = m_tabs->addTab(viewer, viewer->title());
+    m_tabs->setTabToolTip(index, path);
+    m_tabs->setCurrentIndex(index);
+    updateTabsSidebar();
+}
+
+void MainWindow::updateSecurityIndicator()
+{
+    if (!m_lockAction)
+        return;
+
+    BrowserTab *tab = qobject_cast<BrowserTab *>(m_tabs->currentWidget());
+    if (!tab) {
+        m_lockAction->setIcon(makeLockIcon(QString(), m_darkMode));
+        m_lockAction->setToolTip(QString());
+        return;
+    }
+
+    const QUrl u = tab->webView()->url();
+    const QString scheme = u.scheme();
+    m_lockAction->setIcon(makeLockIcon(scheme, m_darkMode));
+
+    if (scheme.compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0)
+        m_lockAction->setToolTip(tr("Conexión segura (HTTPS):\n%1").arg(u.host()));
+    else if (scheme.compare(QStringLiteral("http"), Qt::CaseInsensitive) == 0)
+        m_lockAction->setToolTip(tr("Conexión no segura (HTTP):\n%1").arg(u.host()));
+    else if (u.host().isEmpty())
+        m_lockAction->setToolTip(tr("Página interna de Kinetix"));
+    else
+        m_lockAction->setToolTip(u.toString());
+}
+
+void MainWindow::updateStatusBarState()
+{
+    updateSecurityIndicator();
+}
+
+void MainWindow::updateStatusBarVisibility()
+{
+    if (!statusBar())
+        return;
+    statusBar()->setVisible(!statusBar()->currentMessage().isEmpty());
+}
+
+void MainWindow::onLinkHovered(const QString &url)
+{
+    if (!m_linkBubble)
+        return;
+    if (qobject_cast<BrowserTab *>(sender()) != m_tabs->currentWidget()) {
+        m_linkBubble->hide();
+        return;
+    }
+    if (url.isEmpty() || (!url.startsWith(QStringLiteral("http"))
+                          && !url.startsWith(QStringLiteral("file"))
+                          && !url.startsWith(QStringLiteral("mailto")))) {
+        m_linkBubble->hide();
+        return;
+    }
+    const QFontMetrics fm(m_linkBubble->font());
+    m_linkBubble->setText(fm.elidedText(url, Qt::ElideMiddle, 560));
+    m_linkBubble->adjustSize();
+    positionLinkBubble();
+    m_linkBubble->show();
+    m_linkBubble->raise();
+}
+
+void MainWindow::positionLinkBubble()
+{
+    if (!m_linkBubble || !m_tabs)
+        return;
+    const int x = 12;
+    const int y = m_tabs->height() - m_linkBubble->height() - 12;
+    m_linkBubble->move(x, qMax(8, y));
+}
+
+void MainWindow::fillHistoryList(QListWidget *list, const QString &filter)
+{
+    if (!list)
+        return;
+    list->clear();
+    const QString needle = filter.trimmed();
+    for (const QVariantMap &entry : m_history) {
+        const QString title = entry.value(QStringLiteral("titulo")).toString();
+        const QString url = entry.value(QStringLiteral("url")).toString();
+        const QString haystack = title + QStringLiteral(" ") + url;
+        if (!needle.isEmpty() && !haystack.contains(needle, Qt::CaseInsensitive))
+            continue;
+
+        const QString shownTitle = title.isEmpty() ? url : title;
+        QListWidgetItem *item = new QListWidgetItem(list);
+        item->setText(shownTitle);
+        item->setData(Qt::UserRole, url);
+        item->setData(Qt::UserRole + 1, title.isEmpty() ? QString() : url);
+        item->setToolTip(url);
+        item->setForeground(m_pal.color(m_pal.text));
+    }
+    if (list->count() == 0) {
+        QListWidgetItem *empty = new QListWidgetItem(list);
+        empty->setText(needle.isEmpty() ? tr("Todavía no hay historial\nLas páginas que visites aparecerán aquí.")
+                                        : tr("Sin resultados"));
+        empty->setFlags(Qt::NoItemFlags);
+        empty->setTextAlignment(Qt::AlignCenter);
+        empty->setForeground(m_pal.color(m_pal.textMuted));
+    }
 }
 
 void MainWindow::applyTheme()
@@ -860,6 +1894,8 @@ void MainWindow::applyTheme()
     if (m_btnFavorites) m_btnFavorites->setIcon(makeNavIcon(QStringLiteral("favorites"), m_darkMode));
     if (m_btnMenu)   m_btnMenu->setIcon(makeNavIcon(QStringLiteral("menu"), m_darkMode));
     if (m_btnDownloads) m_btnDownloads->setIcon(makeNavIcon(QStringLiteral("downloads"), m_darkMode));
+
+    updateSecurityIndicator();
     if (m_dlIcon)    m_dlIcon->setPixmap(makeNavIcon(QStringLiteral("downloads"), m_darkMode).pixmap(18, 18));
     if (m_tabsSidebar && m_showTabsSidebar)
         updateTabsSidebar();
@@ -907,9 +1943,9 @@ QString MainWindow::buildHomePage()
             iconTag = QStringLiteral("<img src=\"data:image/png;base64,%1\">").arg(QString::fromLatin1(data.toBase64()));
         }
 
-        tiles += QStringLiteral("<div class=\"tile-w\"><a class=\"tile\" href=\"%1\"><div class=\"icon\">%2</div><div class=\"t\">%3</div><div class=\"u\">%4</div></a>"
+        tiles += QStringLiteral("<div class=\"tile-w\"><a class=\"tile\" href=\"%1\"><div class=\"icon\">%2</div><div class=\"t\">%3</div></a>"
                                 "<button class=\"dots\" onclick=\"onDots('%5', this)\">&#8942;</button></div>")
-                    .arg(url.toHtmlEscaped(), iconTag, title.toHtmlEscaped(), host.toHtmlEscaped(), url.toHtmlEscaped());
+                    .arg(url.toHtmlEscaped(), iconTag, title.toHtmlEscaped(), url.toHtmlEscaped());
     }
     if (tiles.isEmpty())
         tiles = QStringLiteral("<p class=\"empty\">Aún no hay sitios visitados. Navega un poco y aparecerán aquí.</p>");
@@ -927,43 +1963,45 @@ QString MainWindow::buildHomePage()
   * { box-sizing: border-box; }
   body { margin:0; font-family:"Segoe UI",system-ui,sans-serif; background:#131313;
          color:#ebebeb; display:flex; flex-direction:column; align-items:center; min-height:100vh; }
-  h1 { font-size:34px; margin:44px 0 2px; letter-spacing:2px;
-       background:linear-gradient(90deg,#4ea1ff,#a06bff);
-       -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
-  .sub { color:#8a8a8a; margin-bottom:20px; font-size:13px; }
-  form { width:min(620px,90vw); display:flex; margin-bottom:30px; }
-  input { flex:1; padding:12px 16px; font-size:15px; border-radius:10px 0 0 10px;
-          border:1px solid #333; background:#1e1e1e; color:#f0f0f0; outline:none; }
-  input:focus { border-color:#4ea1ff; }
-  button { padding:0 20px; font-size:15px; border:none; cursor:pointer;
-           border-radius:0 10px 10px 0; background:#4ea1ff; color:#06131f; font-weight:600; }
-  h2 { width:min(760px,90vw); font-size:12px; text-transform:uppercase; letter-spacing:2px;
+  h1 { font-size:40px; margin:48px 0 2px; letter-spacing:3px;
+       background:linear-gradient(120deg,#5da8ff,#a970ff);
+       -webkit-background-clip:text; -webkit-text-fill-color:transparent; font-weight:700; }
+  .sub { color:#8a8a8a; margin-bottom:24px; font-size:13px; }
+  form { width:min(640px,90vw); display:flex; margin-bottom:34px; }
+  input { flex:1; padding:14px 18px; font-size:16px; border-radius:12px 0 0 12px;
+          border:1px solid #2e2e2e; background:#1b1b1b; color:#f0f0f0; outline:none; }
+  input:focus { border-color:#5da8ff; }
+  button { padding:0 24px; font-size:15px; border:none; cursor:pointer;
+           border-radius:0 12px 12px 0; background:#5da8ff; color:#06131f; font-weight:600; }
+  h2 { width:min(820px,90vw); font-size:12px; text-transform:uppercase; letter-spacing:2px;
        color:#7a7a7a; margin:6px 0 12px; }
-  .grid { width:min(760px,90vw); display:grid;
-          grid-template-columns:repeat(auto-fill,minmax(88px,1fr)); gap:12px; margin-bottom:44px; }
-  .tile-w { position:relative; }
-  .tile { display:flex; flex-direction:column; align-items:center; gap:7px; padding:12px 4px;
-          text-decoration:none; color:#ebebeb; background:#1c1c1c; border:1px solid #2b2b2b;
-          border-radius:12px; transition:transform .08s, border-color .08s; }
-  .tile:hover { transform:translateY(-2px); border-color:#4ea1ff; }
-  .icon { width:40px; height:40px; display:flex; align-items:center; justify-content:center; }
-  .icon img { width:38px; height:38px; border-radius:8px; }
-  .t { font-size:12px; font-weight:600; max-width:80px; white-space:nowrap;
-       overflow:hidden; text-overflow:ellipsis; }
-  .u { font-size:10px; color:#7a7a7a; max-width:80px; white-space:nowrap;
-       overflow:hidden; text-overflow:ellipsis; }
-  .dots { position:absolute; top:4px; right:4px; width:22px; height:22px; padding:0;
+.grid { width:min(800px,90vw); display:grid;
+          grid-template-columns:repeat(6, 1fr); grid-template-rows:repeat(2, 110px); gap:10px; margin-bottom:32px; }
+  .tile-w { position:relative; height:110px; }
+  .tile { display:flex; flex-direction:column; align-items:center; gap:5px; padding:12px 6px 10px;
+          text-decoration:none; color:#ebebeb; background:#1b1b1b; border:1px solid #2a2a2a;
+          border-radius:12px; transition:border-color .08s, background .08s; width:100%; height:110px; box-sizing:border-box; }
+  .tile:hover { border-color:#5da8ff; background:#1f1f1f; }
+  .icon { width:52px; height:52px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .icon img { width:52px; height:52px; border-radius:10px; object-fit:contain; }
+  .icon-fallback { width:52px; height:52px; border-radius:10px; background:#232323;
+                    color:#8a8a8a; display:flex; align-items:center; justify-content:center; font-size:22px; font-weight:600; }
+  .t { font-size:11px; font-weight:600; width:100%; text-align:center;
+       display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+       line-height:1.3; max-height:2.6em; }
+  .dots { position:absolute; top:6px; right:6px; width:22px; height:22px; padding:0;
           border:none; border-radius:6px; background:transparent; color:#8a8a8a;
-          font-size:14px; cursor:pointer; display:none; }
-  .tile-w:hover .dots { display:block; }
+          font-size:13px; cursor:pointer; opacity:0; transition:opacity .08s; }
+  .tile-w:hover .dots { opacity:1; }
   .dots:hover { background:#2c2c2c; color:#ffffff; }
   .menu { display:none; position:fixed; z-index:9; background:#242424;
-          border:1px solid #3a3a3a; border-radius:10px;
-          box-shadow:0 6px 18px rgba(0,0,0,0.5); min-width:130px; overflow:hidden; }
-  .menu button { display:block; width:100%; padding:9px 14px; border:none; background:transparent;
-                 color:#ebebeb; text-align:left; cursor:pointer; font-size:13px; border-radius:0; }
+          border:1px solid #3a3a3a; border-radius:12px;
+          box-shadow:0 10px 30px rgba(0,0,0,0.6); min-width:150px; overflow:hidden; }
+  .menu button { display:block; width:100%; padding:11px 18px; border:none; background:transparent;
+                 color:#ebebeb; text-align:left; cursor:pointer; font-size:13px; }
   .menu button:hover { background:#2f6fbf; color:#ffffff; }
   .empty { color:#6f6f6f; font-size:13px; margin-bottom:44px; }
+
 </style>
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script>
@@ -989,9 +2027,9 @@ QString MainWindow::buildHomePage()
   function actRemove(){ if(window.kinetix && pending){ window.kinetix.remove(pending); hideMenu(); } }
 </script></head><body>
   <h1>Kinetix</h1>
-  <div class="sub">Rápido y ligero</div>
+  <div class="sub">¿Qué vamos a hacer hoy?</div>
   <form action="%1" method="get">
-    <input name="q" placeholder="Busca en la web" autofocus>
+    <input name="q" placeholder="Busca en la web o escribe una URL" autofocus>
     <button type="submit">Buscar</button>
   </form>
   <h2>Más visitados</h2>
@@ -1015,26 +2053,87 @@ BrowserTab *MainWindow::newTab(const QString &url)
     connect(tab->webView(), &QWebEngineView::loadFinished, this, &MainWindow::registerHistoryOnLoadFinished);
     connect(tab->webView(), &QWebEngineView::loadFinished, this, [this](bool) { updateZoomStatus(); });
 
+    connect(tab, &BrowserTab::linkHovered, this, &MainWindow::onLinkHovered);
+
     auto *page = tab->webView()->page();
+
+    connect(page, &QWebEnginePage::findTextFinished, this,
+            [this](const QWebEngineFindTextResult &result) {
+                if (m_findBar && m_findBar->isVisible() && m_findCount) {
+                    m_findCount->setText(QStringLiteral("%1/%2")
+                                             .arg(result.activeMatch())
+                                             .arg(result.numberOfMatches()));
+                }
+            });
     connect(page, &QWebEnginePage::newWindowRequested, this,
             [this](QWebEngineNewWindowRequest &request) {
-                const QUrl requested = request.requestedUrl();
-                if (requested.isEmpty())
-                    return;
-                BrowserTab *nt = newTab(requested.toString());
-                if (nt)
-                    request.openIn(nt->webView()->page());
-            });
+        const QUrl requested = request.requestedUrl();
+        if (requested.isEmpty() || !requested.isValid())
+            return;
 
+        // Política de ventanas emergentes: solo se permiten si el usuario inicia
+        // la acción (clic, tecla). Las aperturas automáticas se ignoran.
+        if (!request.isUserInitiated()) {
+            return;
+        }
+
+        BrowserTab *nt = newTab(requested.toString());
+        if (nt)
+            request.openIn(nt->webView()->page());
+    });
+
+    // Pantalla completa pedida por la propia web (botón de YouTube, etc.).
+    // Sin este manejador Chromium no llega a entrar nunca: la pantalla completa
+    // de los vídeos parecía deshabilitada.
+    connect(page, &QWebEnginePage::fullScreenRequested, this,
+            [this, page](QWebEngineFullScreenRequest request) {
+        if (request.toggleOn()) {
+            request.accept();
+            m_webFullscreenPage = page;
+            m_wasMaximized = isMaximized();
+            setBrowserChromeVisible(false);
+            showFullScreen();
+        } else {
+            request.accept();
+            m_webFullscreenPage = nullptr;
+            exitFullscreen();
+        }
+    });
+
+    // Puente nativo: el objeto solo se registra en la página mientras muestra
+    // contenido interno; si la página navega a la web, se desregistra para que
+    // nada externo pueda llamar a métodos nativos.
     auto *channel = new QWebChannel(page);
     auto *bridge = new HomeBridge(channel);
+    bridge->setPage(page);
     connect(bridge, &HomeBridge::openRequested, this, [this](const QString &url) {
         if (!url.isEmpty())
             openUrlInCurrentTab(url);
     });
     connect(bridge, &HomeBridge::editRequested, this, [this](const QString &url) { editTileName(url); });
     connect(bridge, &HomeBridge::removeRequested, this, [this](const QString &url) { deleteTileUrl(url); });
-    channel->registerObject(QStringLiteral("kinetix"), bridge);
+
+    // Estado del registro guardado en la propia página (propiedad dinámica),
+    // para que el alta/baja sea determinista independientemente del orden
+    // en que lleguen las señales de carga.
+    static const char kRegisteredProp[] = "kinetixRegistered";
+    bridge->setProperty(kRegisteredProp, false);
+    setHomeBridge(channel, bridge, url.isEmpty());
+
+    // Al navegar, el puente solo sigue vivo si el destino sigue siendo interno.
+    connect(page, &QWebEnginePage::loadStarted, page, [this, page]() {
+        QWebChannel *ch = page->findChild<QWebChannel *>();
+        HomeBridge *br = page->findChild<HomeBridge *>();
+        if (ch && br)
+            setHomeBridge(ch, br, page->url() == QUrl(QStringLiteral("kinetix://inicio")));
+    });
+    connect(page, &QWebEnginePage::loadFinished, page, [this, page](bool) {
+        QWebChannel *ch = page->findChild<QWebChannel *>();
+        HomeBridge *br = page->findChild<HomeBridge *>();
+        if (ch && br)
+            setHomeBridge(ch, br, page->url() == QUrl(QStringLiteral("kinetix://inicio")));
+    });
+
     page->setWebChannel(channel);
 
     const int index = m_tabs->addTab(tab, QStringLiteral("Nueva pestaña"));
@@ -1098,32 +2197,21 @@ void MainWindow::showMainMenu()
 {
     QMenu menu;
     QAction *aNew = menu.addAction(QStringLiteral("Nueva pestaña"));
+    QAction *aPrivate = menu.addAction(QStringLiteral("Nueva ventana privada"));
+    QAction *aReopen = menu.addAction(QStringLiteral("Reabrir pestaña cerrada"));
+    aReopen->setEnabled(!m_closedTabs.isEmpty());
     QAction *aHistory = menu.addAction(QStringLiteral("Historial"));
     QAction *aFav = menu.addAction(QStringLiteral("Añadir a favoritos"));
     menu.addSeparator();
-    QAction *aBookBar = menu.addAction(QStringLiteral("Mostrar barra de marcadores"));
-    aBookBar->setCheckable(true);
-    aBookBar->setChecked(m_showBookmarkBar);
-    QAction *aSide = menu.addAction(QStringLiteral("Barra lateral de pestañas"));
-    aSide->setCheckable(true);
-    aSide->setChecked(m_showTabsSidebar);
+    QAction *aTasks = menu.addAction(QStringLiteral("Administrador de tareas"));
     menu.addSeparator();
+    QAction *aFind = menu.addAction(QStringLiteral("Buscar en la página"));
     QAction *aPdf = menu.addAction(QStringLiteral("Guardar como PDF"));
+    QAction *aOpenPdf = menu.addAction(QStringLiteral("Abrir PDF…"));
     QAction *aEditor = menu.addAction(QStringLiteral("Editor de código"));
     menu.addSeparator();
-    QAction *aZoomIn = menu.addAction(QStringLiteral("Acercar (Ctrl +)"));
-    QAction *aZoomOut = menu.addAction(QStringLiteral("Alejar (Ctrl −)"));
-    QAction *aZoomReset = menu.addAction(QStringLiteral("Restablecer zoom (Ctrl 0)"));
-    menu.addSeparator();
-    QAction *aDark = menu.addAction(QStringLiteral("Modo oscuro"));
-    aDark->setCheckable(true);
-    aDark->setChecked(m_darkMode);
-    QAction *aFull = menu.addAction(QStringLiteral("Pantalla completa"));
-    aFull->setCheckable(true);
-    aFull->setChecked(isFullScreen());
-    menu.addSeparator();
     QAction *aSettings = menu.addAction(QStringLiteral("Configuración"));
-    QAction *aClear = menu.addAction(QStringLiteral("Borrar historial"));
+    QAction *aUpdate = menu.addAction(QStringLiteral("Buscar actualizaciones"));
     QAction *aAbout = menu.addAction(QStringLiteral("Acerca de Kinetix"));
     menu.addSeparator();
     QAction *aExit = menu.addAction(QStringLiteral("Salir"));
@@ -1134,32 +2222,32 @@ void MainWindow::showMainMenu()
 
     if (chosen == aNew)
         newTab();
+    else if (chosen == aPrivate)
+        openPrivateWindow();
+    else if (chosen == aReopen)
+        reopenClosedTab();
     else if (chosen == aHistory)
         showHistoryDialog();
     else if (chosen == aFav)
         addBookmarkFromCurrent();
-    else if (chosen == aBookBar)
-        toggleBookmarkBar();
-    else if (chosen == aSide)
-        toggleTabsSidebar();
+    else if (chosen == aTasks)
+        showTaskManager();
+    else if (chosen == aFind)
+        showFindBar();
     else if (chosen == aPdf)
         savePdf();
+    else if (chosen == aOpenPdf) {
+        const QString path = QFileDialog::getOpenFileName(this, tr("Abrir PDF"), QString(),
+                                                          tr("Documentos PDF (*.pdf)"));
+        if (!path.isEmpty())
+            openPdfInViewer(path);
+    }
     else if (chosen == aEditor)
         openCodeEditor();
-    else if (chosen == aZoomIn)
-        zoomIn();
-    else if (chosen == aZoomOut)
-        zoomOut();
-    else if (chosen == aZoomReset)
-        zoomReset();
-    else if (chosen == aDark)
-        toggleDarkMode(!m_darkMode);
-    else if (chosen == aFull)
-        toggleFullscreen();
     else if (chosen == aSettings)
         showSettingsDialog();
-    else if (chosen == aClear)
-        clearHistory();
+    else if (chosen == aUpdate)
+        checkForUpdates(true);
     else if (chosen == aAbout)
         showAbout();
     else if (chosen == aExit)
@@ -1172,6 +2260,17 @@ void MainWindow::closeTab(int index)
         return;
 
     QWidget *widget = m_tabs->widget(index);
+    if (auto *bt = qobject_cast<BrowserTab *>(widget)) {
+        const QString url = bt->webView()->url().toString();
+        if (url.startsWith(QStringLiteral("http"))) {
+            QVariantMap entry;
+            entry.insert(QStringLiteral("url"), url);
+            entry.insert(QStringLiteral("titulo"), bt->webView()->title());
+            m_closedTabs.prepend(entry);
+            while (m_closedTabs.size() > 30)
+                m_closedTabs.removeLast();
+        }
+    }
     m_tabs->removeTab(index);
     if (widget)
         widget->deleteLater();
@@ -1183,11 +2282,19 @@ void MainWindow::closeTab(int index)
 void MainWindow::currentTabChanged(int index)
 {
     Q_UNUSED(index);
+    updateTabLifecycle();
     updateUrlBarFromCurrent();
     updateNavigationState();
     updateSidebarActiveState();
     updateZoomStatus();
     refreshTabLoading();
+
+    BrowserTab *tab = qobject_cast<BrowserTab *>(m_tabs->currentWidget());
+    Q_UNUSED(tab);
+    if (m_linkBubble)
+        m_linkBubble->hide();
+    if (m_findBar && m_findBar->isVisible() && m_findInput && !m_findInput->text().isEmpty())
+        findNext(true);
 }
 
 void MainWindow::onTabTitleChanged(BrowserTab *tab, const QString &title)
@@ -1213,6 +2320,7 @@ void MainWindow::onTabFaviconChanged(BrowserTab *tab, const QIcon &icon)
     m_tabs->setTabIcon(index, icon);
     if (tab)
         saveFaviconIcon(tab->webView()->url().toString(), icon);
+    fetchHighResFavicon(tab ? tab->webView()->url().toString() : QString());
     updateSidebarItemText(index);
 }
 
@@ -1292,12 +2400,19 @@ void MainWindow::toggleBookmarkBar()
 void MainWindow::toggleFullscreen()
 {
     if (isFullScreen()) {
+        if (m_webFullscreenPage) {
+            m_webFullscreenPage->runJavaScript(
+                QStringLiteral("document.fullscreenElement && document.exitFullscreen()"));
+            return;
+        }
+        setBrowserChromeVisible(true);
         if (m_wasMaximized)
             showMaximized();
         else
             showNormal();
     } else {
         m_wasMaximized = isMaximized();
+        setBrowserChromeVisible(false);
         showFullScreen();
     }
 }
@@ -1307,10 +2422,27 @@ void MainWindow::exitFullscreen()
     if (!isFullScreen())
         return;
 
+    setBrowserChromeVisible(true);
+    m_webFullscreenPage = nullptr;
     if (m_wasMaximized)
         showMaximized();
     else
         showNormal();
+}
+
+// Oculta la barra de herramientas, la barra de marcadores, la barra lateral y
+// la barra de pestañas para que el contenido (un vídeo a pantalla completa)
+// ocupe toda la ventana. Se restaura según las preferencias del usuario.
+void MainWindow::setBrowserChromeVisible(bool visible)
+{
+    if (m_toolBar)
+        m_toolBar->setVisible(visible);
+    if (m_bookmarkBar)
+        m_bookmarkBar->setVisible(visible && m_showBookmarkBar);
+    if (m_tabsSidebarPanel)
+        m_tabsSidebarPanel->setVisible(visible && m_showTabsSidebar);
+    if (m_tabs && m_tabs->tabBar())
+        m_tabs->tabBar()->setVisible(visible && !m_showTabsSidebar);
 }
 
 void MainWindow::openCodeEditor()
@@ -1364,11 +2496,11 @@ void MainWindow::showAbout()
     QMessageBox about(this);
     about.setWindowTitle(tr("Acerca de Kinetix"));
     about.setIcon(QMessageBox::Information);
-    about.setText(QStringLiteral("<h2>Kinetix 1.0</h2>"));
+    about.setText(QStringLiteral("<h2>Kinetix %1</h2>").arg(QCoreApplication::applicationVersion()));
     about.setInformativeText(tr(
-        "<p>Navegador web r&aacute;pido y ligero, desarrollado en C++ con Qt %1 y Chromium.</p>"
+        "<p>Navegador web r&aacute;pido y ligero, desarrollado por <b>CuriosVault</b> en C++ con Qt %1 y Chromium.</p>"
         "<p><b>Caracter&iacute;sticas:</b><br>"
-        "- Navegaci&oacute;n por pesta&ntilde;as con barra lateral<br>"
+        "- Navegaci&oacute;n por pesta&ntilde;as con barra lateral reorganizable<br>"
         "- Animaciones de carga en las pesta&ntilde;as<br>"
         "- Descargas con bot&oacute;n de progreso animado<br>"
         "- Marcadores, historial, modo oscuro y zoom<br>"
@@ -1376,10 +2508,88 @@ void MainWindow::showAbout()
         "- Certificados, permisos y contenido seguro gestionados<br>"
         "- Exportaci&oacute;n a PDF y editor de c&oacute;digo integrado<br>"
         "- Configuraci&oacute;n avanzada de RAM y GPU<br>"
-        "- Sesi&oacute;n y cookies persistidas en disco</p>")
+        "- Sesi&oacute;n y cookies persistidas en disco<br>"
+        "- Congelaci&oacute;n inteligente de pestañas en segundo plano<br>"
+        "- Favicons de alta resoluci&oacute;n (64x64) en p&aacute;gina de inicio</p>")
         .arg(QStringLiteral(QT_VERSION_STR)));
-    about.setStandardButtons(QMessageBox::Ok);
+    about.setStandardButtons(QMessageBox::NoButton);
+    QPushButton *checkBtn = about.addButton(tr("Buscar actualizaciones"), QMessageBox::ActionRole);
+    QPushButton *notesBtn = about.addButton(tr("Ver novedades"), QMessageBox::ActionRole);
+    about.addButton(tr("Cerrar"), QMessageBox::RejectRole);
     about.exec();
+
+    if (about.clickedButton() == checkBtn) {
+        checkForUpdates(true);
+    } else if (about.clickedButton() == notesBtn) {
+        if (!m_latestVersion.isEmpty())
+            showReleaseNotes(m_latestVersion, m_latestNotes, m_latestUrl);
+        else {
+            m_pendingNotesView = true;
+            checkForUpdates(false);
+        }
+    }
+}
+
+void MainWindow::checkForUpdates(bool manual)
+{
+    if (!m_updateChecker)
+        return;
+    m_updateCheckManual = manual;
+    m_updateChecker->check(QStringLiteral("cvault-node/Kinetix"),
+                           QCoreApplication::applicationVersion());
+}
+
+void MainWindow::showAvailableUpdate(const QString &version, const QString &notes, const QString &url)
+{
+    QMessageBox box(this);
+    box.setWindowTitle(tr("Actualización disponible"));
+    box.setIcon(QMessageBox::Information);
+    box.setText(QStringLiteral("<h3>Kinetix %1 disponible</h3>").arg(version));
+    box.setInformativeText(tr("Tienes la versión %1. Hay una nueva versión lista para descargar.")
+                               .arg(QCoreApplication::applicationVersion()));
+    box.setStandardButtons(QMessageBox::NoButton);
+    QPushButton *download = box.addButton(tr("Descargar"), QMessageBox::AcceptRole);
+    QPushButton *notesBtn = box.addButton(tr("Ver novedades"), QMessageBox::ActionRole);
+    box.addButton(tr("Más tarde"), QMessageBox::RejectRole);
+    box.exec();
+
+    if (box.clickedButton() == download) {
+        if (!url.isEmpty())
+            QDesktopServices::openUrl(QUrl(url));
+    } else if (box.clickedButton() == notesBtn) {
+        showReleaseNotes(version, notes, url);
+    }
+}
+
+void MainWindow::showReleaseNotes(const QString &version, const QString &notes, const QString &url)
+{
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Novedades de Kinetix %1").arg(version));
+    dlg.resize(560, 480);
+
+    auto *layout = new QVBoxLayout(&dlg);
+    auto *title = new QLabel(QStringLiteral("<h3>Kinetix %1</h3>").arg(version), &dlg);
+    layout->addWidget(title);
+
+    auto *browser = new QTextBrowser(&dlg);
+    browser->setOpenExternalLinks(true);
+    if (notes.trimmed().isEmpty())
+        browser->setPlainText(tr("Esta versión no incluye notas."));
+    else
+        browser->setMarkdown(notes);
+    layout->addWidget(browser);
+
+    auto *buttons = new QDialogButtonBox(&dlg);
+    QPushButton *openBtn = buttons->addButton(tr("Abrir en GitHub"), QDialogButtonBox::ActionRole);
+    buttons->addButton(QDialogButtonBox::Close);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(openBtn, &QPushButton::clicked, &dlg, [url]() {
+        if (!url.isEmpty())
+            QDesktopServices::openUrl(QUrl(url));
+    });
+    layout->addWidget(buttons);
+
+    dlg.exec();
 }
 
 void MainWindow::adjustZoom(double delta)
@@ -1460,6 +2670,12 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         && (event->type() == QEvent::Move || event->type() == QEvent::Resize)) {
         positionDownloadBar();
     }
+    if (obj == m_tabs && event->type() == QEvent::Resize) {
+        if (m_findBar && m_findBar->isVisible())
+            positionFindBar();
+        if (m_linkBubble && m_linkBubble->isVisible())
+            positionLinkBubble();
+    }
     if (obj == m_zoomBadge && m_zoomBadgeTimer && m_zoomAnim && m_zoomEffect) {
         if (event->type() == QEvent::Enter) {
             m_zoomBadgeTimer->stop();
@@ -1472,6 +2688,21 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
                 m_zoomBadgeTimer->start();
         }
     }
+
+    // Congelar también cuando la ventana no está activa o está minimizada:
+    // la pestaña visible seguiría consumiendo CPU si el usuario está en otra
+    // aplicación. Al volver, se reactiva sola.
+    if (obj == this) {
+        if (event->type() == QEvent::WindowActivate || event->type() == QEvent::WindowDeactivate
+            || event->type() == QEvent::WindowStateChange) {
+            QTimer::singleShot(0, this, &MainWindow::updateTabLifecycle);
+        }
+        if (event->type() == QEvent::Hide)
+            m_freezeAllForHidden = true;
+        if (event->type() == QEvent::Show)
+            m_freezeAllForHidden = false;
+    }
+
     return QMainWindow::eventFilter(obj, event);
 }
 
@@ -1699,6 +2930,35 @@ void MainWindow::updateSidebarActiveState()
     }
 }
 
+void MainWindow::updateTabLifecycle()
+{
+    const bool freezeBg = m_settings->value("rendimiento/congelar_fondo", true).toBool();
+    if (!freezeBg || !m_tabs)
+        return;
+
+    // La ventana está minimizada u oculta: se congela todo, incluso la actual.
+    const bool windowInactive = m_freezeAllForHidden || !isActiveWindow() || isMinimized();
+    const int cur = m_tabs->currentIndex();
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        auto *bt = qobject_cast<BrowserTab *>(m_tabs->widget(i));
+        if (!bt || !bt->webView() || !bt->webView()->page())
+            continue;
+        QWebEnginePage *pg = bt->webView()->page();
+
+        // Las pestañas que suenan nunca se congelan.
+        if (i != cur && pg->recentlyAudible())
+            continue;
+
+        const bool shouldFreeze = windowInactive || i != cur;
+        if (shouldFreeze) {
+            if (pg->lifecycleState() != QWebEnginePage::LifecycleState::Frozen)
+                pg->setLifecycleState(QWebEnginePage::LifecycleState::Frozen);
+        } else if (pg->lifecycleState() != QWebEnginePage::LifecycleState::Active) {
+            pg->setLifecycleState(QWebEnginePage::LifecycleState::Active);
+        }
+    }
+}
+
 void MainWindow::refreshTabLoading()
 {
     if (!m_tabs)
@@ -1758,6 +3018,13 @@ void MainWindow::handleDownloadRequested(QWebEngineDownloadRequest *download)
 {
     if (!download || download->downloadFileName().isEmpty())
         return;
+
+    // Sanitiza el nombre que propone el servidor: sin separadores de ruta, sin
+    // "..", sin caracteres de control y sin nombres reservados de Windows.
+    QString safeName = sanitizeDownloadFileName(download->downloadFileName());
+    if (safeName.isEmpty())
+        return;
+    download->setDownloadFileName(safeName);
 
     download->accept();
     m_downloads.append(download);
@@ -2337,8 +3604,13 @@ void MainWindow::saveDownloadHistory()
 
 void MainWindow::openDownloadFile(const QString &path)
 {
-    if (!path.isEmpty() && QFile::exists(path))
-        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    if (path.isEmpty() || !QFile::exists(path))
+        return;
+    if (path.endsWith(QStringLiteral(".pdf"), Qt::CaseInsensitive)) {
+        openPdfInViewer(path);
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
 void MainWindow::openDownloadFolder(const QString &path)
@@ -2557,7 +3829,6 @@ void MainWindow::showDownloadsDialog()
     auto *list = new QListWidget(&dialog);
     list->setIconSize(QSize(18, 18));
     list->setSpacing(3);
-    list->setAlternatingRowColors(true);
     list->setUniformItemSizes(false);
 
     auto refreshList = [this, list]() {
@@ -2828,58 +4099,106 @@ void MainWindow::openUrlInCurrentTab(const QString &url)
 
 void MainWindow::showHistoryDialog()
 {
-    QDialog *dialog = new QDialog(this);
-    dialog->setWindowTitle(tr("Historial"));
-    dialog->setMinimumWidth(620);
-    dialog->setModal(true);
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Historial — Kinetix"));
+    dialog.setMinimumSize(700, 420);
+    dialog.setModal(true);
 
-    auto *list = new QListWidget(dialog);
+    auto *search = new QLineEdit(&dialog);
+    search->setPlaceholderText(tr("Buscar en el historial…"));
+    search->setClearButtonEnabled(true);
+    search->setFixedHeight(34);
+
+    auto *list = new QListWidget(&dialog);
     list->setIconSize(QSize(18, 18));
-    for (const QVariantMap &entry : m_history) {
-        const QString title = entry.value(QStringLiteral("titulo")).toString();
-        const QString url = entry.value(QStringLiteral("url")).toString();
-        QListWidgetItem *item = new QListWidgetItem(list);
-        item->setText(QStringLiteral("%1  ·  %2").arg(title, url));
-        item->setData(Qt::UserRole, url);
-        item->setToolTip(url);
-    }
+    list->setSpacing(1);
+    list->setUniformItemSizes(false);
+    list->setItemDelegate(new HistoryItemDelegate(m_pal, list));
+    list->setSelectionMode(QAbstractItemView::SingleSelection);
+    list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-    auto *btnOpen = new QPushButton(tr("Abrir"), dialog);
-    auto *btnClear = new QPushButton(tr("Borrar historial"), dialog);
-    auto *btnClose = new QPushButton(tr("Cerrar"), dialog);
-    connect(btnOpen, &QPushButton::clicked, dialog, [dialog, list, this]() {
+    fillHistoryList(list, QString());
+
+    auto getUrl = [list]() -> QString {
         QListWidgetItem *item = list->currentItem();
         if (!item)
-            return;
-        const QString url = item->data(Qt::UserRole).toString();
+            return QString();
+        return item->data(Qt::UserRole).toString();
+    };
+
+    auto *btnOpen = new QPushButton(tr("Abrir"), &dialog);
+    auto *btnRemove = new QPushButton(tr("Eliminar"), &dialog);
+    auto *btnClear = new QPushButton(tr("Borrar todo"), &dialog);
+    auto *btnClose = new QPushButton(tr("Cerrar"), &dialog);
+    btnOpen->setCursor(Qt::PointingHandCursor);
+    btnRemove->setCursor(Qt::PointingHandCursor);
+    btnClear->setCursor(Qt::PointingHandCursor);
+    btnClose->setCursor(Qt::PointingHandCursor);
+    btnOpen->setEnabled(false);
+    btnRemove->setEnabled(false);
+
+    auto updateButtons = [getUrl, btnOpen, btnRemove]() {
+        const bool valid = !getUrl().isEmpty();
+        btnOpen->setEnabled(valid);
+        btnRemove->setEnabled(valid);
+    };
+
+    connect(search, &QLineEdit::textChanged, &dialog, [this, list, updateButtons](const QString &text) {
+        fillHistoryList(list, text);
+        updateButtons();
+    });
+    connect(list, &QListWidget::itemSelectionChanged, &dialog, updateButtons);
+
+    auto openCurrent = [this, getUrl]() {
+        const QString url = getUrl();
         if (!url.isEmpty())
             openUrlInCurrentTab(url);
-        dialog->accept();
+    };
+    connect(btnOpen, &QPushButton::clicked, &dialog, [openCurrent, &dialog]() {
+        openCurrent();
+        dialog.accept();
     });
-    connect(btnClear, &QPushButton::clicked, dialog, [this, list]() {
+    connect(btnRemove, &QPushButton::clicked, &dialog, [this, list, search, getUrl, updateButtons]() {
+        const QString url = getUrl();
+        if (url.isEmpty())
+            return;
+        for (int i = m_history.size() - 1; i >= 0; --i) {
+            if (m_history.at(i).value(QStringLiteral("url")).toString() == url)
+                m_history.removeAt(i);
+        }
+        saveHistory();
+        fillHistoryList(list, search->text());
+        updateButtons();
+    });
+    connect(btnClear, &QPushButton::clicked, &dialog, [this, list, search, updateButtons, &dialog]() {
+        const auto answer = QMessageBox::question(&dialog, tr("Borrar historial"),
+            tr("¿Eliminar todo el historial de navegación?"), QMessageBox::Yes | QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
         m_history.clear();
         saveHistory();
-        list->clear();
+        search->clear();
+        fillHistoryList(list, QString());
+        updateButtons();
     });
-    connect(btnClose, &QPushButton::clicked, dialog, &QDialog::accept);
-    connect(list, &QListWidget::itemDoubleClicked, dialog, [dialog, list, this](QListWidgetItem *item) {
-        const QString url = item->data(Qt::UserRole).toString();
-        if (!url.isEmpty())
-            openUrlInCurrentTab(url);
-        dialog->accept();
+    connect(btnClose, &QPushButton::clicked, &dialog, &QDialog::accept);
+    connect(list, &QListWidget::itemDoubleClicked, &dialog, [openCurrent, &dialog](QListWidgetItem *) {
+        openCurrent();
+        dialog.accept();
     });
 
-    auto *layout = new QVBoxLayout(dialog);
-    layout->addWidget(list);
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(search);
+    layout->addWidget(list, 1);
     auto *buttons = new QHBoxLayout;
     buttons->addWidget(btnOpen);
+    buttons->addWidget(btnRemove);
     buttons->addStretch(1);
     buttons->addWidget(btnClear);
     buttons->addWidget(btnClose);
     layout->addLayout(buttons);
-    dialog->setLayout(layout);
-    dialog->exec();
-    dialog->deleteLater();
+    dialog.setLayout(layout);
+    dialog.exec();
 }
 
 void MainWindow::showSettingsDialog()
@@ -2887,111 +4206,259 @@ void MainWindow::showSettingsDialog()
     QDialog *dialog = new QDialog(this);
     dialog->setWindowTitle(tr("Configuración"));
     dialog->setModal(true);
+    dialog->resize(560, 520);
 
-    auto *dark = new QCheckBox(tr("Modo oscuro"), dialog);
+    auto *tabs = new QTabWidget(dialog);
+
+    // === General tab ===
+    auto *general = new QWidget;
+    auto *genLayout = new QVBoxLayout(general);
+    genLayout->setSpacing(12);
+
+    auto *dark = new QCheckBox(tr("Modo oscuro"), general);
     dark->setChecked(m_darkMode);
-    auto *bookBar = new QCheckBox(tr("Mostrar barra de marcadores"), dialog);
+    auto *bookBar = new QCheckBox(tr("Mostrar barra de marcadores"), general);
     bookBar->setChecked(m_showBookmarkBar);
-    auto *tabsSide = new QCheckBox(tr("Mostrar barra lateral de pestañas"), dialog);
+    auto *tabsSide = new QCheckBox(tr("Mostrar barra lateral de pestañas"), general);
     tabsSide->setChecked(m_showTabsSidebar);
+    auto *showFullUrl = new QCheckBox(tr("Mostrar URL completa en la barra de direcciones"), general);
+    showFullUrl->setChecked(m_settings->value("apariencia/url_completa", false).toBool());
 
-    auto *engineLabel = new QLabel(tr("Motor de búsqueda:"), dialog);
-    auto *engine = new QComboBox(dialog);
+    auto *engineLabel = new QLabel(tr("Motor de búsqueda:"), general);
+    auto *engine = new QComboBox(general);
     engine->addItems({QStringLiteral("Google"), QStringLiteral("Bing"), QStringLiteral("DuckDuckGo")});
-    const int idx = engine->findText(m_searchEngine);
-    engine->setCurrentIndex(idx < 0 ? 0 : idx);
+    const int eidx = engine->findText(m_searchEngine);
+    engine->setCurrentIndex(eidx < 0 ? 0 : eidx);
 
-    auto *cache = new QPushButton(tr("Borrar caché y cookies"), dialog);
+    auto *startupLabel = new QLabel(tr("Al iniciar:"), general);
+    auto *startup = new QComboBox(general);
+    startup->addItems({tr("Página de inicio"), tr("Pestaña en blanco"), tr("Restaurar sesión anterior")});
+    const int sidx = startup->findData(m_settings->value("general/inicio", 0).toInt());
+    startup->setCurrentIndex(sidx >= 0 ? sidx : 0);
 
-    auto *code = new QLineEdit(dialog);
-    code->setPlaceholderText(tr("Escribe un código interno…"));
-    code->setClearButtonEnabled(true);
+    genLayout->addWidget(new QLabel(tr("<b>Apariencia</b>"), general));
+    genLayout->addWidget(dark);
+    genLayout->addWidget(bookBar);
+    genLayout->addWidget(tabsSide);
+    genLayout->addWidget(showFullUrl);
+    genLayout->addSpacing(8);
+    genLayout->addWidget(new QLabel(tr("<b>Búsqueda</b>"), general));
+    genLayout->addWidget(engineLabel);
+    genLayout->addWidget(engine);
+    genLayout->addSpacing(8);
+    genLayout->addWidget(new QLabel(tr("<b>Inicio</b>"), general));
+    genLayout->addWidget(startupLabel);
+    genLayout->addWidget(startup);
+    genLayout->addStretch();
+
+    tabs->addTab(general, tr("General"));
+
+    // === Privacidad tab ===
+    auto *privacy = new QWidget;
+    auto *privLayout = new QVBoxLayout(privacy);
+    privLayout->setSpacing(12);
+
+    auto *clearBtn = new QPushButton(tr("Borrar caché y cookies"), privacy);
+    auto *clearAllBtn = new QPushButton(tr("Borrar todos los datos de navegación…"), privacy);
+    auto *doNotTrack = new QCheckBox(tr("Enviar cabecera \"Do Not Track\""), privacy);
+    doNotTrack->setChecked(m_settings->value("privacidad/dnt", false).toBool());
+    auto *blockThirdParty = new QCheckBox(tr("Bloquear cookies de terceros"), privacy);
+    blockThirdParty->setChecked(m_settings->value("privacidad/bloquear_terceros", false).toBool());
+
+    auto *privInfo = new QLabel(tr(
+        "<b>Qué guarda Kinetix y dónde</b><br>"
+        "Todo se almacena en local, en su perfil de usuario:<br>"
+        "<tt>~/.navegador_personal/</tt><br>"
+        "• <tt>config.ini</tt> — ajustes (tema, buscador, rendimiento)<br>"
+        "• <tt>perfil/</tt> — perfil de Chromium: cookies, caché, sesiones, almacenamiento web<br>"
+        "• <tt>historial</tt>, <tt>marcadores</tt>, <tt>descargas</tt> — sus datos de navegación<br>"
+        "• <tt>iconos/</tt> — favicons guardados en caché<br><br>"
+        "<b>Qué NO hace</b><br>"
+        "• No se envían datos a CuriosVault ni a ningún servidor propio.<br>"
+        "• No hay telemetría, analítica ni identificador de instalación.<br>"
+        "• Las descargas de favicons van directo al sitio correspondiente.<br>"
+        "• No se ejecuta automáticamente ningún archivo descargado.<br><br>"
+        "<b>Nota sobre Safe Browsing</b><br>"
+        "Para que el navegador no haga peticiones ocultas a Google en segundo plano, "
+        "se ha desactivado la red en segundo plano; por eso las listas de phishing "
+        "no se actualizan solas. Revise siempre la URL antes de introducir datos."),
+        privacy);
+    privInfo->setWordWrap(true);
+    privInfo->setAlignment(Qt::AlignTop);
+    privInfo->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    privInfo->setOpenExternalLinks(true);
+
+    auto *privScroll = new QScrollArea(privacy);
+    privScroll->setWidget(privInfo);
+    privScroll->setWidgetResizable(true);
+    privScroll->setFrameShape(QFrame::NoFrame);
+
+    privLayout->addWidget(new QLabel(tr("<b>Datos de navegación</b>"), privacy));
+    privLayout->addWidget(clearBtn);
+    privLayout->addWidget(clearAllBtn);
+    privLayout->addSpacing(8);
+    privLayout->addWidget(new QLabel(tr("<b>Protección</b>"), privacy));
+    privLayout->addWidget(doNotTrack);
+    privLayout->addWidget(blockThirdParty);
+    privLayout->addSpacing(8);
+    privLayout->addWidget(privScroll, 1);
+
+    tabs->addTab(privacy, tr("Privacidad"));
+
+    // === Rendimiento tab ===
+    auto *perf = new QWidget;
+    auto *perfLayout = new QVBoxLayout(perf);
+    perfLayout->setSpacing(12);
 
     const bool oldGpuOn = m_settings->value(QStringLiteral("recursos/gpu_acelerado"), true).toBool();
     const int oldGpuMb = m_settings->value(QStringLiteral("recursos/memoria_gpu_mb"), 0).toInt();
     const int oldRamMb = m_settings->value(QStringLiteral("recursos/ram_max_mb"), 0).toInt();
 
-    auto *resGroup = new QGroupBox(tr("Recursos de renderizado"), dialog);
-    resGroup->setVisible(false);
-    auto *chkGpu = new QCheckBox(tr("Aceleración por hardware (GPU)"), resGroup);
+    auto *chkGpu = new QCheckBox(tr("Aceleración por hardware (GPU)"), perf);
     chkGpu->setChecked(oldGpuOn);
-    auto *spGpuMb = new QSpinBox(resGroup);
+    auto *spGpuMb = new QSpinBox(perf);
     spGpuMb->setRange(0, 16384);
     spGpuMb->setSingleStep(256);
     spGpuMb->setSuffix(QStringLiteral(" MB"));
     spGpuMb->setSpecialValueText(tr("0 = sin límite"));
     spGpuMb->setValue(oldGpuMb);
-    auto *spRamMb = new QSpinBox(resGroup);
+    auto *spRamMb = new QSpinBox(perf);
     spRamMb->setRange(0, 8192);
     spRamMb->setSingleStep(64);
     spRamMb->setSuffix(QStringLiteral(" MB"));
     spRamMb->setSpecialValueText(tr("0 = sin límite"));
     spRamMb->setValue(oldRamMb);
-    auto *spCacheMb = new QSpinBox(resGroup);
+    auto *spCacheMb = new QSpinBox(perf);
     spCacheMb->setRange(16, 2048);
     spCacheMb->setSuffix(QStringLiteral(" MB"));
-    spCacheMb->setValue(m_settings->value(QStringLiteral("recursos/cache_mb"), 64).toInt());
-    auto *resForm = new QFormLayout(resGroup);
-    resForm->addRow(tr("Aceleración por hardware:"), chkGpu);
-    resForm->addRow(tr("Memoria de GPU máx:"), spGpuMb);
-    resForm->addRow(tr("RAM máx por pestaña:"), spRamMb);
-    resForm->addRow(tr("Caché en disco:"), spCacheMb);
+    spCacheMb->setValue(m_settings->value(QStringLiteral("recursos/cache_mb"), 256).toInt());
 
+    auto *freezeBg = new QCheckBox(tr("Congelar pestañas en segundo plano (ahorra RAM/CPU)"), perf);
+    freezeBg->setChecked(m_settings->value("rendimiento/congelar_fondo", true).toBool());
+    auto *prefetch = new QCheckBox(tr("Precargar enlaces al pasar el ratón"), perf);
+    prefetch->setChecked(m_settings->value("rendimiento/prefetch", false).toBool());
+    auto *videoLight = new QCheckBox(tr("Vídeo ligero (pausa vídeos silenciados fuera de pantalla)"), perf);
+    videoLight->setChecked(m_settings->value("rendimiento/video_ligero", false).toBool());
+    videoLight->setToolTip(tr("Reduce el consumo al ver páginas con vídeos que se reproducen solos. "
+                              "Se aplica al reiniciar."));
+    auto *videoHw = new QCheckBox(tr("Decodificación de vídeo por hardware"), perf);
+    videoHw->setChecked(m_settings->value("rendimiento/video_hw", false).toBool());
+    videoHw->setToolTip(tr("Descomprime el vídeo en la gráfica (mejor rendimiento en streaming), "
+                           "pero en gráficas Intel antiguas puede provocar parpadeo. "
+                           "Se aplica al reiniciar."));
+    auto *gpuRaster = new QCheckBox(tr("Rasterizado por GPU (avanzado)"), perf);
+    gpuRaster->setChecked(m_settings->value("rendimiento/gpu_raster", false).toBool());
+    gpuRaster->setToolTip(tr("Descarga el pintado y el desplazamiento en la gráfica. Puede mejorar "
+                              "la fluidez, pero en controladores gráficos antiguos causa parpadeo; "
+                              "déjalo desactivado si notas parpadeos. Se aplica al reiniciar."));
+    auto *gpuComp = new QCheckBox(tr("Más rápido (composición por GPU)"), perf);
+    gpuComp->setChecked(m_settings->value("rendimiento/composicion_gpu", false).toBool());
+    gpuComp->setToolTip(tr("Rápido, pero en gráficas Intel antiguas puede parpadear. Para navegación "
+                           "sin parpadeo deja esta casilla desactivada. Se aplica al reiniciar."));
+
+
+    perfLayout->addWidget(new QLabel(tr("<b>Recursos de renderizado</b> (requieren reinicio)"), perf));
+    perfLayout->addWidget(chkGpu);
+    auto *formP = new QFormLayout;
+    formP->addRow(tr("Memoria de GPU máx:"), spGpuMb);
+    formP->addRow(tr("RAM máx por pestaña:"), spRamMb);
+    formP->addRow(tr("Caché en disco:"), spCacheMb);
+    perfLayout->addLayout(formP);
+    perfLayout->addSpacing(8);
+    perfLayout->addWidget(new QLabel(tr("<b>Optimizaciones</b>"), perf));
+    perfLayout->addWidget(freezeBg);
+    perfLayout->addWidget(prefetch);
+    perfLayout->addWidget(videoLight);
+    perfLayout->addWidget(videoHw);
+    perfLayout->addWidget(gpuRaster);
+    perfLayout->addWidget(gpuComp);
+    perfLayout->addStretch();
+
+    tabs->addTab(perf, tr("Rendimiento"));
+
+    // === Avanzado tab (secret code) ===
+    auto *code = new QLineEdit(dialog);
+    code->setPlaceholderText(tr("Escribe un código interno…"));
+    code->setClearButtonEnabled(true);
+
+    auto *advGroup = new QGroupBox(tr("Opciones avanzadas"), dialog);
+    advGroup->setVisible(false);
+    auto *advForm = new QFormLayout(advGroup);
+
+    auto *spMaxCon = new QSpinBox(advGroup);
+    spMaxCon->setRange(1, 50);
+    spMaxCon->setValue(m_settings->value("avanzado/max_conexiones", 6).toInt());
+    spMaxCon->setToolTip(tr("Máximo de conexiones simultáneas por host"));
+
+    auto *spTimeout = new QSpinBox(advGroup);
+    spTimeout->setRange(5, 300);
+    spTimeout->setSuffix(QStringLiteral(" s"));
+    spTimeout->setValue(m_settings->value("avanzado/timeout", 30).toInt());
+
+    advForm->addRow(tr("Máx. conexiones/host:"), spMaxCon);
+    advForm->addRow(tr("Timeout de red:"), spTimeout);
+
+    auto *uaCompat = new QCheckBox(
+        tr("Identificarse como Chrome (solo si un sitio falla)"), advGroup);
+    uaCompat->setChecked(m_settings->value("avanzado/ua_compat_chrome", false).toBool());
+    uaCompat->setToolTip(tr(
+        "Por defecto Kinetix se identifica con su nombre real. Active esto solo "
+        "para sitios antiguos que rechacen navegadores que no reconozcan."));
+    advForm->addRow(QString(), uaCompat);
+
+    // === Botones ===
     auto *saveBtn = new QPushButton(tr("Guardar"), dialog);
     saveBtn->setDefault(true);
     auto *cancelBtn = new QPushButton(tr("Cancelar"), dialog);
     connect(cancelBtn, &QPushButton::clicked, dialog, &QDialog::reject);
 
-    auto *form = new QVBoxLayout;
-    form->setSpacing(12);
-    form->addWidget(dark);
-    form->addWidget(bookBar);
-    form->addWidget(tabsSide);
-    auto *engineRow = new QHBoxLayout;
-    engineRow->addWidget(engineLabel);
-    engineRow->addWidget(engine, 1);
-    form->addLayout(engineRow);
-    form->addWidget(cache);
-    auto *codeRow = new QHBoxLayout;
-    codeRow->addWidget(new QLabel(tr("Comando:"), dialog));
-    codeRow->addWidget(code, 1);
-    form->addLayout(codeRow);
-    form->addWidget(resGroup);
-
-    connect(code, &QLineEdit::textChanged, resGroup, [resGroup](const QString &t) {
-        const QString c = t.trimmed();
-        resGroup->setVisible(c.compare(QStringLiteral("render"), Qt::CaseInsensitive) == 0
-                             || c.compare(QStringLiteral("recursos"), Qt::CaseInsensitive) == 0);
-    });
+    auto *mainLayout = new QVBoxLayout(dialog);
+    mainLayout->addWidget(tabs);
+    mainLayout->addSpacing(8);
+    mainLayout->addWidget(new QLabel(tr("Código interno:"), dialog));
+    mainLayout->addWidget(code);
+    mainLayout->addWidget(advGroup);
 
     auto *buttons = new QHBoxLayout;
     buttons->addStretch(1);
     buttons->addWidget(saveBtn);
     buttons->addWidget(cancelBtn);
+    mainLayout->addLayout(buttons);
 
-    auto *layout = new QVBoxLayout(dialog);
-    layout->addLayout(form);
-    layout->addLayout(buttons);
-    dialog->setLayout(layout);
+    connect(code, &QLineEdit::textChanged, advGroup, [advGroup](const QString &t) {
+        const QString c = t.trimmed();
+        advGroup->setVisible(c.compare(QStringLiteral("render"), Qt::CaseInsensitive) == 0
+                             || c.compare(QStringLiteral("recursos"), Qt::CaseInsensitive) == 0
+                             || c.compare(QStringLiteral("avanzado"), Qt::CaseInsensitive) == 0);
+    });
 
-    connect(saveBtn, &QPushButton::clicked, dialog, [this, dialog, dark, bookBar, tabsSide, engine, chkGpu, spGpuMb, spRamMb, spCacheMb, oldGpuOn, oldGpuMb, oldRamMb]() {
+    connect(saveBtn, &QPushButton::clicked, dialog, [this, dialog, dark, bookBar, tabsSide, showFullUrl, engine, startup,
+                                                      doNotTrack, blockThirdParty, chkGpu, spGpuMb, spRamMb, spCacheMb,
+                                                       freezeBg, prefetch, videoLight, videoHw, gpuRaster, gpuComp,
+                                                      spMaxCon, spTimeout,
+                                                      uaCompat, oldGpuOn, oldGpuMb, oldRamMb]() {
         toggleDarkMode(dark->isChecked());
         m_showBookmarkBar = bookBar->isChecked();
-        if (m_bookmarkBar)
-            m_bookmarkBar->setVisible(m_showBookmarkBar);
+        if (m_bookmarkBar) m_bookmarkBar->setVisible(m_showBookmarkBar);
         m_settings->setValue(QStringLiteral("apariencia/barra_marcadores"), m_showBookmarkBar);
         m_showTabsSidebar = tabsSide->isChecked();
-        if (m_tabsSidebarPanel)
-            m_tabsSidebarPanel->setVisible(m_showTabsSidebar);
-        if (m_tabs)
-            m_tabs->tabBar()->setVisible(!m_showTabsSidebar);
+        if (m_tabsSidebarPanel) m_tabsSidebarPanel->setVisible(m_showTabsSidebar);
+        if (m_tabs) m_tabs->tabBar()->setVisible(!m_showTabsSidebar);
         m_settings->setValue(QStringLiteral("apariencia/pestanas_laterales"), m_showTabsSidebar);
         updateTabsSidebar();
+
+        m_settings->setValue(QStringLiteral("apariencia/url_completa"), showFullUrl->isChecked());
+
         const QString newEngine = engine->currentText();
         if (newEngine != m_searchEngine) {
             m_searchEngine = newEngine;
             m_settings->setValue(QStringLiteral("busqueda/motor"), m_searchEngine);
         }
+        m_settings->setValue(QStringLiteral("general/inicio"), startup->currentIndex());
+
+        m_settings->setValue(QStringLiteral("privacidad/dnt"), doNotTrack->isChecked());
+        m_settings->setValue(QStringLiteral("privacidad/bloquear_terceros"), blockThirdParty->isChecked());
+
         const bool newGpu = chkGpu->isChecked();
         const int newGpuMb = spGpuMb->value();
         const int newRamMb = spRamMb->value();
@@ -3002,20 +4469,401 @@ void MainWindow::showSettingsDialog()
         m_settings->setValue(QStringLiteral("recursos/cache_mb"), newCacheMb);
         if (m_profile)
             m_profile->setHttpCacheMaximumSize(qint64(newCacheMb) * 1024 * 1024);
+
+        m_settings->setValue(QStringLiteral("rendimiento/congelar_fondo"), freezeBg->isChecked());
+        m_settings->setValue(QStringLiteral("rendimiento/prefetch"), prefetch->isChecked());
+
+        // El vídeo ligero forma parte de los scripts del perfil y necesita reiniciar.
+        if (videoLight->isChecked() != m_settings->value(QStringLiteral("rendimiento/video_ligero"), false).toBool()) {
+            m_settings->setValue(QStringLiteral("rendimiento/video_ligero"), videoLight->isChecked());
+            QMessageBox::information(dialog, tr("Vídeo ligero"),
+                tr("La optimización de vídeo se aplicará al reiniciar el navegador."));
+        }
+        if (videoHw->isChecked() != m_settings->value(QStringLiteral("rendimiento/video_hw"), false).toBool()) {
+            m_settings->setValue(QStringLiteral("rendimiento/video_hw"), videoHw->isChecked());
+            QMessageBox::information(dialog, tr("Vídeo por hardware"),
+                tr("La decodificación de vídeo por hardware se aplicará al reiniciar el navegador."));
+        }
+        if (gpuRaster->isChecked() != m_settings->value(QStringLiteral("rendimiento/gpu_raster"), false).toBool()) {
+            m_settings->setValue(QStringLiteral("rendimiento/gpu_raster"), gpuRaster->isChecked());
+            QMessageBox::information(dialog, tr("Rasterizado por GPU"),
+                tr("El rasterizado por GPU se aplicará al reiniciar el navegador."));
+        }
+        if (gpuComp->isChecked() != m_settings->value(QStringLiteral("rendimiento/composicion_gpu"), false).toBool()) {
+            m_settings->setValue(QStringLiteral("rendimiento/composicion_gpu"), gpuComp->isChecked());
+            QMessageBox::information(dialog, tr("Composición por GPU"),
+                tr("El modo de composición se aplicará al reiniciar el navegador. "
+                   "Activarlo hace la navegación más rápida, pero en gráficas Intel antiguas puede parpadear."));
+        }
+
+        m_settings->setValue(QStringLiteral("avanzado/max_conexiones"), spMaxCon->value());
+        m_settings->setValue(QStringLiteral("avanzado/timeout"), spTimeout->value());
+
+        // La identificación del navegador solo cambia al reiniciar el perfil.
+        if (m_settings->value(QStringLiteral("avanzado/ua_compat_chrome"), false).toBool()
+                != uaCompat->isChecked()) {
+            m_settings->setValue(QStringLiteral("avanzado/ua_compat_chrome"), uaCompat->isChecked());
+            QMessageBox::information(dialog, tr("Identificación del navegador"),
+                tr("El cambio de identificación del navegador se aplicará al reiniciar."));
+        }
+
         if (newGpu != oldGpuOn || newGpuMb != oldGpuMb || newRamMb != oldRamMb) {
             QMessageBox::information(dialog, tr("Recursos de renderizado"),
                 tr("Aceleración por hardware, memoria de GPU y RAM se aplicarán al reiniciar el navegador."));
         }
         dialog->accept();
     });
-    connect(cache, &QPushButton::clicked, this, [this]() {
+    connect(clearBtn, &QPushButton::clicked, this, [this]() {
         QWebEngineProfile *p = m_profile ? m_profile : QWebEngineProfile::defaultProfile();
         p->cookieStore()->deleteAllCookies();
         p->clearHttpCache();
     });
+    connect(clearAllBtn, &QPushButton::clicked, this, [this]() { clearAllBrowsingData(); });
 
     dialog->exec();
     dialog->deleteLater();
+}
+
+// Abre una ventana nueva con un perfil off-the-record: cookies, caché y
+// almacenamiento web viven solo en memoria y desaparecen al cerrarla. El
+// historial tampoco se escribe en disco (ver registerHistoryOnLoadFinished).
+void MainWindow::openPrivateWindow()
+{
+    auto *privateProfile = new QWebEngineProfile();
+    auto *win = new MainWindow(privateProfile, nullptr, true);
+    privateProfile->setParent(win);
+    win->show();
+    win->raise();
+    win->activateWindow();
+}
+
+// Administrador de tareas: muestra el consumo real de RAM y CPU de cada
+// proceso de Kinetix y de las pestañas que aloja.
+void MainWindow::showTaskManager()
+{
+    if (auto *existing = findChild<QDialog *>(QStringLiteral("taskManagerDialog"))) {
+        existing->raise();
+        existing->activateWindow();
+        return;
+    }
+
+    auto *dlg = new QDialog(this);
+    dlg->setObjectName(QStringLiteral("taskManagerDialog"));
+    dlg->setWindowTitle(tr("Administrador de tareas"));
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->resize(680, 460);
+
+    auto *summary = new QLabel(dlg);
+    summary->setTextFormat(Qt::RichText);
+    summary->setWordWrap(true);
+
+    const int kKeyRole = Qt::UserRole;
+    const int kPidRole = Qt::UserRole + 1;
+    const int kTabRole = Qt::UserRole + 2;
+
+    auto *tree = new QTreeWidget(dlg);
+    tree->setColumnCount(5);
+    tree->setHeaderLabels({tr("Pestaña o proceso"), tr("Sitio"), tr("PID"),
+                           tr("Memoria"), tr("CPU")});
+    tree->setRootIsDecorated(true);
+    tree->setIndentation(16);
+    tree->setUniformRowHeights(true);
+    tree->setExpandsOnDoubleClick(false);
+    tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    tree->setSelectionBehavior(QAbstractItemView::SelectRows);
+    tree->setSelectionMode(QAbstractItemView::SingleSelection);
+    tree->setAlternatingRowColors(false);
+    tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    for (int c = 1; c < 5; ++c)
+        tree->header()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
+
+    auto *closeProc = new QPushButton(tr("Cerrar pestañas del proceso"), dlg);
+    closeProc->setEnabled(false);
+    auto *closeTabBtn = new QPushButton(tr("Cerrar pestaña"), dlg);
+    closeTabBtn->setEnabled(false);
+    auto *closeBtn = new QPushButton(tr("Cerrar"), dlg);
+
+    auto *hint = new QLabel(tr("Doble clic en una pestaña para ir a ella. Las pestañas del mismo "
+                               "sitio comparten proceso y consumo."), dlg);
+    hint->setEnabled(false);
+    hint->setWordWrap(true);
+
+    auto *layout = new QVBoxLayout(dlg);
+    layout->addWidget(summary);
+    layout->addWidget(tree, 1);
+    layout->addWidget(hint);
+    auto *btns = new QHBoxLayout;
+    btns->addWidget(closeTabBtn);
+    btns->addWidget(closeProc);
+    btns->addStretch(1);
+    btns->addWidget(closeBtn);
+    layout->addLayout(btns);
+
+    // Estado para calcular el % de CPU como variación entre muestras.
+    auto prevCpu = std::make_shared<QHash<quint64, QPair<quint64, qint64>>>();
+    auto prevTotal = std::make_shared<QPair<quint64, qint64>>(0, 0);
+
+    // Habilita los botones según lo seleccionado.
+    auto updateButtons = [tree, closeProc, closeTabBtn, kPidRole, kTabRole]() {
+        QTreeWidgetItem *item = tree->currentItem();
+        const bool hasProc = item && item->data(0, kPidRole).toULongLong() != 0;
+        const bool hasTab = item && item->data(0, kTabRole).toULongLong() != 0;
+        closeProc->setEnabled(hasProc);
+        closeTabBtn->setEnabled(hasTab);
+    };
+
+    auto refresh = [this, tree, summary, prevCpu, prevTotal, updateButtons,
+                    kKeyRole, kPidRole, kTabRole]() {
+        const QList<ProcSample> samples = sampleKinetixProcesses();
+        QHash<quint64, ProcSample> byPid;
+        quint64 totalMem = 0;
+        quint64 totalCpu = 0;
+        for (const ProcSample &s : samples) {
+            byPid.insert(s.pid, s);
+            totalMem += s.workingSetBytes;
+            totalCpu += s.cpu100ns;
+        }
+
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        auto cpuPercent = [&](quint64 pid, quint64 cpu) -> double {
+            auto it = prevCpu->constFind(pid);
+            double pct = -1.0;
+            if (it != prevCpu->constEnd() && cpu >= it->first) {
+                const qint64 dt = nowMs - it->second;
+                if (dt > 0)
+                    pct = (double(cpu - it->first) / 10000.0) / double(dt) * 100.0;
+            }
+            prevCpu->insert(pid, qMakePair(cpu, nowMs));
+            return pct;
+        };
+        QHash<quint64, double> pct;
+        for (const ProcSample &s : samples)
+            pct.insert(s.pid, cpuPercent(s.pid, s.cpu100ns));
+
+        auto memText = [](quint64 bytes) {
+            return QStringLiteral("%1 MB").arg(QString::number(double(bytes) / (1024.0 * 1024.0), 'f', 1));
+        };
+        auto cpuText = [](double p) {
+            return p < 0.0 ? QStringLiteral("—") : QStringLiteral("%1 %").arg(QString::number(p, 'f', 1));
+        };
+
+        // Agrupa las pestañas por proceso de renderizado.
+        struct TabInfo { BrowserTab *tab; QString title; QString site; };
+        QMap<quint64, QList<TabInfo>> groups;
+        int browserTabCount = 0;
+        for (int i = 0; i < m_tabs->count(); ++i) {
+            auto *bt = qobject_cast<BrowserTab *>(m_tabs->widget(i));
+            if (!bt || !bt->webView() || !bt->webView()->page())
+                continue;
+            ++browserTabCount;
+            const quint64 pid = bt->webView()->page()->renderProcessPid();
+            const QString title = m_tabs->tabText(i).trimmed();
+            const QUrl u = bt->webView()->url();
+            TabInfo info;
+            info.tab = bt;
+            info.title = title.isEmpty() ? tr("(sin título)") : title;
+            info.site = u.host().isEmpty() ? (u.scheme().isEmpty() ? QStringLiteral("—") : u.scheme())
+                                           : u.host();
+            groups[pid].append(info);
+        }
+
+        // Estado a restaurar tras reconstruir.
+        QString selKey;
+        if (auto *ci = tree->currentItem())
+            selKey = ci->data(0, kKeyRole).toString();
+        QSet<QString> expanded;
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            auto *it = tree->topLevelItem(i);
+            if (it->isExpanded())
+                expanded.insert(it->data(0, kKeyRole).toString());
+        }
+        const int scroll = tree->verticalScrollBar() ? tree->verticalScrollBar()->value() : 0;
+
+        auto fill = [](QTreeWidgetItem *it, const QString &c0, const QString &c1,
+                       const QString &c2, const QString &c3, const QString &c4) {
+            it->setText(0, c0);
+            it->setText(1, c1);
+            it->setText(2, c2);
+            it->setText(3, c3);
+            it->setText(4, c4);
+            it->setTextAlignment(3, Qt::AlignRight | Qt::AlignVCenter);
+            it->setTextAlignment(4, Qt::AlignRight | Qt::AlignVCenter);
+        };
+
+        tree->setUpdatesEnabled(false);
+        const bool wasBlocked = tree->blockSignals(true);
+        tree->clear();
+
+        const quint64 browserPid = static_cast<quint64>(QCoreApplication::applicationPid());
+        const ProcSample browserSample = byPid.value(browserPid);
+        {
+            auto *it = new QTreeWidgetItem(tree);
+            it->setData(0, kKeyRole, QStringLiteral("browser"));
+            it->setData(0, kPidRole, QVariant::fromValue<qulonglong>(0));
+            fill(it, tr("Navegador (Kinetix)"), QStringLiteral("—"), QString::number(browserPid),
+                 memText(browserSample.workingSetBytes), cpuText(pct.value(browserPid, -1.0)));
+        }
+
+        QList<quint64> procPids = groups.keys();
+        std::sort(procPids.begin(), procPids.end(), [&](quint64 a, quint64 b) {
+            return byPid.value(b).workingSetBytes < byPid.value(a).workingSetBytes;
+        });
+        for (quint64 pid : procPids) {
+            const QList<TabInfo> list = groups.value(pid);
+            const ProcSample s = byPid.value(pid);
+            if (pid == 0) {
+                auto *it = new QTreeWidgetItem(tree);
+                it->setData(0, kKeyRole, QStringLiteral("proc:0"));
+                it->setData(0, kPidRole, QVariant::fromValue<qulonglong>(0));
+                fill(it, tr("Pestañas sin proceso (cargando)"), QStringLiteral("—"),
+                     QStringLiteral("—"), memText(s.workingSetBytes), cpuText(pct.value(pid, -1.0)));
+                continue;
+            }
+            if (list.size() == 1) {
+                const TabInfo &t = list.first();
+                auto *it = new QTreeWidgetItem(tree);
+                it->setData(0, kKeyRole, QStringLiteral("proc:%1").arg(pid));
+                it->setData(0, kPidRole, QVariant::fromValue<qulonglong>(pid));
+                it->setData(0, kTabRole, QVariant::fromValue<qulonglong>(
+                    static_cast<qulonglong>(reinterpret_cast<quintptr>(t.tab))));
+                fill(it, t.title, t.site, QString::number(pid),
+                     memText(s.workingSetBytes), cpuText(pct.value(pid, -1.0)));
+            } else {
+                auto *parent = new QTreeWidgetItem(tree);
+                parent->setData(0, kKeyRole, QStringLiteral("proc:%1").arg(pid));
+                parent->setData(0, kPidRole, QVariant::fromValue<qulonglong>(pid));
+                fill(parent, tr("Proceso %1 · %2 pestañas").arg(pid).arg(list.size()),
+                     QStringLiteral("—"), QString::number(pid),
+                     memText(s.workingSetBytes), cpuText(pct.value(pid, -1.0)));
+                for (const TabInfo &t : list) {
+                    auto *child = new QTreeWidgetItem(parent);
+                    const qulonglong tabPtr = static_cast<qulonglong>(reinterpret_cast<quintptr>(t.tab));
+                    child->setData(0, kKeyRole, QStringLiteral("tab:%1:%2").arg(pid).arg(tabPtr));
+                    child->setData(0, kTabRole, QVariant::fromValue<qulonglong>(tabPtr));
+                    fill(child, t.title, t.site, QString(), QString(), QString());
+                }
+            }
+        }
+
+        quint64 auxMem = 0;
+        double auxCpu = -1.0;
+        int auxCount = 0;
+        for (const ProcSample &s : samples) {
+            if (s.pid == browserPid || groups.contains(s.pid))
+                continue;
+            auxMem += s.workingSetBytes;
+            const double p = pct.value(s.pid, -1.0);
+            if (p >= 0.0)
+                auxCpu = (auxCpu < 0.0 ? 0.0 : auxCpu) + p;
+            ++auxCount;
+        }
+        if (auxCount > 0) {
+            auto *it = new QTreeWidgetItem(tree);
+            it->setData(0, kKeyRole, QStringLiteral("aux"));
+            it->setData(0, kPidRole, QVariant::fromValue<qulonglong>(0));
+            fill(it, tr("Procesos auxiliares (GPU, red, utilidades) ×%1").arg(auxCount),
+                 QStringLiteral("—"), QStringLiteral("—"), memText(auxMem), cpuText(auxCpu));
+        }
+
+        // Restaurar expansión, selección y posición del desplazamiento.
+        QTreeWidgetItem *toSelect = nullptr;
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            auto *it = tree->topLevelItem(i);
+            if (expanded.contains(it->data(0, kKeyRole).toString()))
+                it->setExpanded(true);
+            if (!selKey.isEmpty() && it->data(0, kKeyRole).toString() == selKey)
+                toSelect = it;
+            for (int j = 0; j < it->childCount(); ++j) {
+                auto *ch = it->child(j);
+                if (!selKey.isEmpty() && ch->data(0, kKeyRole).toString() == selKey)
+                    toSelect = ch;
+            }
+        }
+        if (toSelect)
+            tree->setCurrentItem(toSelect);
+        if (tree->verticalScrollBar() && scroll > 0)
+            tree->verticalScrollBar()->setValue(scroll);
+
+        tree->blockSignals(wasBlocked);
+        tree->setUpdatesEnabled(true);
+        updateButtons();
+
+        double totalPct = -1.0;
+        if (prevTotal->second > 0 && totalCpu >= prevTotal->first) {
+            const qint64 dt = nowMs - prevTotal->second;
+            if (dt > 0)
+                totalPct = (double(totalCpu - prevTotal->first) / 10000.0) / double(dt) * 100.0;
+        }
+        prevTotal->first = totalCpu;
+        prevTotal->second = nowMs;
+
+        summary->setText(tr("<b>Kinetix</b> · %1 pestaña(s) · %2 proceso(s) · "
+                            "RAM total <b>%3</b> · CPU <b>%4</b>")
+            .arg(browserTabCount)
+            .arg(samples.size())
+            .arg(memText(totalMem))
+            .arg(totalPct < 0.0 ? QStringLiteral("—")
+                                : QStringLiteral("%1 %").arg(QString::number(totalPct, 'f', 1))));
+    };
+
+    connect(tree, &QTreeWidget::itemSelectionChanged, dlg, updateButtons);
+
+    connect(tree, &QTreeWidget::itemDoubleClicked, dlg,
+            [this, kTabRole](QTreeWidgetItem *item, int) {
+        if (!item)
+            return;
+        auto *target = reinterpret_cast<BrowserTab *>(
+            static_cast<quintptr>(item->data(0, kTabRole).toULongLong()));
+        if (!target)
+            return;
+        for (int i = 0; i < m_tabs->count(); ++i) {
+            if (m_tabs->widget(i) == target) {
+                m_tabs->setCurrentIndex(i);
+                return;
+            }
+        }
+    });
+
+    connect(closeProc, &QPushButton::clicked, dlg, [this, tree, kPidRole]() {
+        QTreeWidgetItem *item = tree->currentItem();
+        if (!item)
+            return;
+        const quint64 pid = item->data(0, kPidRole).toULongLong();
+        if (pid == 0)
+            return;
+        for (int i = m_tabs->count() - 1; i >= 0; --i) {
+            auto *bt = qobject_cast<BrowserTab *>(m_tabs->widget(i));
+            if (bt && bt->webView() && bt->webView()->page()
+                    && bt->webView()->page()->renderProcessPid() == pid)
+                closeTab(i);
+        }
+    });
+
+    connect(closeTabBtn, &QPushButton::clicked, dlg, [this, tree, kTabRole]() {
+        QTreeWidgetItem *item = tree->currentItem();
+        if (!item)
+            return;
+        auto *target = reinterpret_cast<BrowserTab *>(
+            static_cast<quintptr>(item->data(0, kTabRole).toULongLong()));
+        if (!target)
+            return;
+        for (int i = 0; i < m_tabs->count(); ++i) {
+            if (m_tabs->widget(i) == target) {
+                closeTab(i);
+                return;
+            }
+        }
+    });
+
+    connect(closeBtn, &QPushButton::clicked, dlg, &QDialog::close);
+
+    auto *timer = new QTimer(dlg);
+    timer->setInterval(1600);
+    connect(timer, &QTimer::timeout, dlg, refresh);
+    timer->start();
+
+    refresh();
+    dlg->show();
 }
 
 void MainWindow::updateNavigationState()
@@ -3038,6 +4886,8 @@ void MainWindow::updateUrlBarFromCurrent()
         url.clear();
     if (m_urlInput->text() != url)
         m_urlInput->setText(url);
+
+    updateStatusBarState();
 }
 
 void MainWindow::registerHistoryOnLoadFinished()
@@ -3062,7 +4912,10 @@ void MainWindow::registerHistoryOnLoadFinished()
     while (m_history.size() > kHistoryLimit)
         m_history.removeLast();
 
-    m_saveTimer->start();
+    // En una ventana privada el historial vive solo en memoria: nunca se
+    // escribe en disco.
+    if (!m_privateMode)
+        m_saveTimer->start();
     updateNavigationState();
 }
 
@@ -3105,15 +4958,63 @@ void MainWindow::updateBookmarksList()
     m_bookmarkBar->setVisible(m_showBookmarkBar);
 }
 
-void MainWindow::clearHistory()
+// Registra (o desregistra) el puente nativo sobre una página.
+// El puente solo existe mientras la página muestre contenido interno de
+// Kinetix, de modo que ninguna web externa pueda llamar a métodos nativos.
+void MainWindow::setHomeBridge(QWebChannel *channel, HomeBridge *bridge, bool internal)
 {
-    const auto answer = QMessageBox::question(this, tr("Borrar historial"),
+    if (!channel || !bridge)
+        return;
+    static const char kRegisteredProp[] = "kinetixRegistered";
+    const bool registered = bridge->property(kRegisteredProp).toBool();
+    if (internal && !registered) {
+        channel->registerObject(QStringLiteral("kinetix"), bridge);
+        bridge->setProperty(kRegisteredProp, true);
+    } else if (!internal && registered) {
+        channel->deregisterObject(bridge);
+        bridge->setProperty(kRegisteredProp, false);
+    }
+}
+
+void MainWindow::clearHistory()
+{    const auto answer = QMessageBox::question(this, tr("Borrar historial"),
         tr("¿Estás seguro de que quieres borrar todo el historial?"), QMessageBox::Yes | QMessageBox::No);
     if (answer != QMessageBox::Yes)
         return;
 
     m_history.clear();
     saveHistory();
+}
+
+void MainWindow::clearAllBrowsingData()
+{
+    const auto answer = QMessageBox::question(
+        this,
+        tr("Borrar todos los datos de navegación"),
+        tr("Se borrará el historial, las cookies y la caché.\n\n"
+           "Tus accesos rápidos y sus nombres se conservan.\n\n"
+           "Las sesiones que tengas abiertas se cerrarán.\n\n"
+           "¿Continuar?"),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+
+    // Cierra las pestañas abiertas: libera sesiones y almacenamiento web.
+    while (m_tabs->count() > 1)
+        closeTab(0);
+    newTab();
+
+    // Cookies y caché del perfil de Chromium.
+    QWebEngineProfile *p = m_profile ? m_profile : QWebEngineProfile::defaultProfile();
+    p->cookieStore()->deleteAllCookies();
+    p->clearHttpCache();
+
+    // Datos propios de Kinetix.
+    m_history.clear();
+    saveHistory();
+
+    statusBar()->showMessage(tr("Datos de navegación borrados"), 4000);
 }
 
 void MainWindow::loadBookmarks()
@@ -3176,6 +5077,9 @@ void MainWindow::loadHistory()
 
 void MainWindow::saveHistory()
 {
+    if (m_privateMode)
+        return;
+
     const QString dir = QDir::homePath() + QStringLiteral("/.navegador_personal");
     QDir().mkpath(dir);
 

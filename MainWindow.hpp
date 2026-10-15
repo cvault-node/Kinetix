@@ -12,8 +12,10 @@
 #include <QSettings>
 #include <QMap>
 #include <QList>
+#include <QSet>
 #include <QVariantMap>
 #include <QDateTime>
+#include <QPointer>
 #include <QString>
 #include <QIcon>
 #include <QLabel>
@@ -28,6 +30,9 @@ class QWebEngineDownloadRequest;
 class QGraphicsOpacityEffect;
 class QPropertyAnimation;
 class QProgressBar;
+class UpdateChecker;
+class SidebarList;
+class QNetworkAccessManager;
 
 #include "BrowserTab.hpp"
 #include "CodeEditor.hpp"
@@ -38,7 +43,8 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWebEngineProfile *profile, QWidget *parent = nullptr);
+    explicit MainWindow(QWebEngineProfile *profile, QWidget *parent = nullptr,
+                        bool privateMode = false);
     ~MainWindow();
 
 protected:
@@ -68,17 +74,33 @@ private slots:
     void toggleTabsSidebar();
     void toggleFullscreen();
     void exitFullscreen();
+    void setBrowserChromeVisible(bool visible);
     void openCodeEditor();
     void addBookmarkFromCurrent();
     void removeBookmark(const QString &name);
     void clearHistory();
+    void clearAllBrowsingData();
+    void setHomeBridge(class QWebChannel *channel, class HomeBridge *bridge, bool internal);
     void showAbout();
+    void checkForUpdates(bool manual = true);
     void showHistoryDialog();
+    void showTaskManager();
+    void openPrivateWindow();
     void showDownloadsDialog();
     void toggleDownloadPanel();
     void showDownloadPanel();
     void rebuildDownloadPanelList();
     void showSettingsDialog();
+    void reopenClosedTab();
+    void showFindBar();
+    void hideFindBar();
+    void findNext(bool forward = true);
+    void moveTab(int from, int to);
+    void openPdfInViewer(const QString &path);
+    void updateSecurityIndicator();
+    void updateStatusBarState();
+    void updateStatusBarVisibility();
+    void onLinkHovered(const QString &url);
     void updateNavigationState();
     void updateUrlBarFromCurrent();
     void updateZoomStatus(bool force = false);
@@ -97,8 +119,14 @@ private:
     void createShortcuts();
     void createLayout();
     void createDownloadBar();
+    void createFindBar();
+    void positionFindBar();
+    void positionLinkBubble();
+    void fillHistoryList(QListWidget *list, const QString &filter);
     void applyTheme();
     QString buildHomePage();
+    void refreshHomeTabs();
+    void fetchHighResFavicon(const QString &pageUrl);
     void loadBookmarks();
     void saveBookmarks();
     void loadHistory();
@@ -126,6 +154,9 @@ private:
     void updateSidebarItemText(int index);
     void updateSidebarActiveState();
     bool hasActiveDownloads() const;
+    void showAvailableUpdate(const QString &version, const QString &notes, const QString &url);
+    void showReleaseNotes(const QString &version, const QString &notes, const QString &url);
+    void updateTabLifecycle();
 
     QTabWidget *m_tabs;
     QLineEdit *m_urlInput;
@@ -176,7 +207,7 @@ private:
     qint64 m_dlLastBytes = 0;
     qint64 m_dlLastTime = 0;
     double m_dlSpeedSmooth = 0.0;
-    QListWidget *m_tabsSidebar;
+    SidebarList *m_tabsSidebar;
     QWidget *m_tabsSidebarPanel;
     QWidget *m_bookmarkBar;
     QHBoxLayout *m_bookmarkBarLayout;
@@ -199,9 +230,29 @@ private:
     QString m_searchEngine;
     QMap<QString, QVariantMap> m_bookmarks;
     QList<QVariantMap> m_history;
+    QList<QVariantMap> m_closedTabs;
     QMap<QString, QString> m_tileNames;
     QTimer *m_saveTimer;
     bool m_wasMaximized;
+    QPointer<QWebEnginePage> m_webFullscreenPage;
+    bool m_freezeAllForHidden = false;
+    bool m_privateMode = false;
+
+    QWidget *m_findBar = nullptr;
+    QLineEdit *m_findInput = nullptr;
+    QLabel *m_findCount = nullptr;
+    QLabel *m_linkBubble = nullptr;
+    QAction *m_lockAction = nullptr;
+
+    UpdateChecker *m_updateChecker = nullptr;
+    bool m_updateCheckManual = false;
+    bool m_pendingNotesView = false;
+    QString m_latestVersion;
+    QString m_latestNotes;
+    QString m_latestUrl;
+
+    QNetworkAccessManager *m_faviconNet = nullptr;
+    QSet<QString> m_faviconFetched;
 };
 
 #endif // MAINWINDOW_HPP

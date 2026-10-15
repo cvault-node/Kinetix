@@ -17,6 +17,9 @@ Palette themePalette(bool dark)
         p.strongText        = QStringLiteral("#ffffff");
         p.hoverText         = QStringLiteral("#ffffff");
 
+        p.scrollHandle      = QStringLiteral("#4a4a4a");
+        p.scrollHandleHover = QStringLiteral("#7d7d7d");
+
         p.statusOk          = QStringLiteral("#54d18c");
         p.statusWarn        = QStringLiteral("#e0a44a");
         p.statusErr         = QStringLiteral("#ff7b7b");
@@ -109,6 +112,9 @@ Palette themePalette(bool dark)
         p.textMuted         = QStringLiteral("#777777");
         p.strongText        = QStringLiteral("#111111");
         p.hoverText         = QStringLiteral("#1f1f1f");
+
+        p.scrollHandle      = QStringLiteral("#c0c0c0");
+        p.scrollHandleHover = QStringLiteral("#a4a4a4");
 
         p.statusOk          = QStringLiteral("#54d18c");
         p.statusWarn        = QStringLiteral("#e0a44a");
@@ -206,7 +212,7 @@ QString buildAppStyleSheet(bool dark)
     const Palette p = themePalette(dark);
 
     static const char *kStyleSheet = R"CSS(
-QMainWindow,QWidget{background:@windowBg;color:@text;}
+QMainWindow{background:@windowBg;color:@text;}
 QToolBar{background:@toolbarBg;border:0;border-bottom:1px solid @toolbarBorder;spacing:6px;padding:0px;}
 QToolButton{background:transparent;border:none;border-radius:5px;padding:4px;}
 QToolButton:hover{background:@toolbarHover;}
@@ -231,6 +237,12 @@ QPushButton:disabled{background:@btnDisabledBg;color:@btnDisabledText;border:1px
 #bookmarkBtn{background:transparent;border:1px solid transparent;border-radius:5px;padding:1px 8px;font-size:11px;color:@bookmarkText;}
 #bookmarkBtn:hover{background:@bookmarkHover;border-color:@bookmarkHoverBorder;}
 QTabWidget::pane{border:0;}
+QTabBar{background:transparent;}
+QTabBar::tab{background:@toolbarBg;color:@textMuted;border:0;padding:10px 18px;margin-right:4px;border-radius:8px 8px 0 0;font-size:13px;min-width:80px;}
+QTabBar::tab:selected{background:@windowBg;color:@text;font-weight:600;}
+QTabBar::tab:hover:!selected{background:@btnHover;color:@text;}
+QTabWidget::pane{border-top:1px solid @toolbarBorder;border-radius:0 8px 8px 8px;background:@windowBg;}
+QSplitter::handle{background:@windowBg;}
 QListWidget{background:@listBg;color:@text;border:0;}
 QListWidget::item{padding:0px;}
 QListWidget::item:hover{background:transparent;}
@@ -239,11 +251,22 @@ QMenu::item{padding:7px 24px;border-radius:4px;}
 QMenu::item:selected{background:@menuSelection;color:@accentText;}
 QMenu::separator{height:1px;background:@menuBorder;margin:4px 10px;}
 QMenuBar{background:@toolbarBg;color:@text;}
+QToolTip{background:@menuBg;color:@text;border:1px solid @menuBorder;padding:4px 6px;}
 QDialog,QDialog QWidget{background:@dialogBg;color:@text;}
-QCheckBox{spacing:8px;}
-QLabel{background:transparent;}
+QCheckBox{spacing:8px;color:@text;}
+QLabel{background:transparent;color:@text;}
+QGroupBox{color:@text;}
 QComboBox{background:@comboBg;border:1px solid @inputBorder;border-radius:6px;padding:4px 8px;}
 QComboBox QAbstractItemView{background:@comboBg;color:@text;selection-background-color:@comboSelection;}
+QTableView,QTableWidget,QTreeView,QTreeWidget{background:@listBg;color:@text;border:1px solid @toolbarBorder;alternate-background-color:@listBg;}
+QTableView::item,QTableWidget::item,QTreeView::item,QTreeWidget::item{background:transparent;color:@text;padding:3px 8px;}
+QTableView::item:selected,QTableWidget::item:selected,QTreeView::item:selected,QTreeWidget::item:selected{background:@comboSelection;color:@strongText;}
+QTableView::item:hover,QTableWidget::item:hover,QTreeView::item:hover,QTreeWidget::item:hover{background:@rowHover;color:@text;}
+QTreeView::branch{background:transparent;}
+QHeaderView{background:@toolbarBg;}
+QHeaderView::section{background:@toolbarBg;color:@textMuted;border:0;border-bottom:1px solid @toolbarBorder;border-right:1px solid @toolbarBorder;padding:5px 8px;font-weight:600;}
+QHeaderView::section:last{border-right:0;}
+QTableCornerButton::section{background:@toolbarBg;border:0;}
 #zoomBadge{background:@badgeBg;border:1px solid @badgeBorder;border-radius:17px;}
 #zoomBadge QLabel{background:transparent;color:@badgeText;font-size:13px;font-weight:600;}
 #zoomCtrl{background:transparent;border:none;border-radius:5px;color:@zoomCtrlText;font-size:15px;font-weight:600;}
@@ -288,13 +311,37 @@ QPlainTextEdit{background:@editorBg;color:@editorText;border:1px solid @editorBo
 #dlFolderBtn:hover{background:@dlFolderBtnHover;}
 #dlCloseBtn{background:transparent;border:none;color:@dlClose;font-size:13px;}
 #dlCloseBtn:hover{background:@dlCloseHover;color:@hoverText;}
+#findBar{background:@badgeBg;border:1px solid @badgeBorder;border-radius:10px;}
+#findCount{color:@badgeText;font-size:12px;padding:0 4px;}
+#findBar QToolButton{background:transparent;border:none;border-radius:5px;color:@badgeText;font-size:13px;padding:4px 6px;}
+#findBar QToolButton:hover{background:@toolbarHover;}
+#pdfToolbar{background:@toolbarBg;border:0;border-bottom:1px solid @toolbarBorder;}
+#pdfToolbar QLabel{color:@badgeText;font-size:12px;padding:0 6px;}
+#pdfView{background:@editorBg;}
+#linkBubble{background:@menuBg;color:@text;border:1px solid @menuBorder;border-radius:6px;padding:4px 8px;font-size:11px;}
+QScrollBar{background:transparent;border:none;margin:0;}
+QScrollBar:vertical{background:transparent;width:16px;margin:2px;}
+QScrollBar::handle:vertical{background:@scrollHandle;min-height:36px;border-radius:6px;margin:0 5px;}
+QScrollBar::handle:vertical:hover{background:@scrollHandleHover;}
+QScrollBar::handle:vertical:pressed{background:@scrollHandleHover;}
+QScrollBar:horizontal{background:transparent;height:16px;margin:2px;}
+QScrollBar::handle:horizontal{background:@scrollHandle;min-width:36px;border-radius:6px;margin:5px 0;}
+QScrollBar::handle:horizontal:hover{background:@scrollHandleHover;}
+QScrollBar::handle:horizontal:pressed{background:@scrollHandleHover;}
+QScrollBar::add-line,QScrollBar::sub-line{background:none;border:none;width:0;height:0;}
+QScrollBar::add-page,QScrollBar::sub-page{background:none;}
+QScrollBar::up-arrow,QScrollBar::down-arrow,QScrollBar::left-arrow,QScrollBar::right-arrow{background:none;border:none;width:0;height:0;}
+QAbstractScrollArea::corner{background:transparent;border:none;}
 )CSS";
 
     QVector<QPair<QString, QString>> tokens = {
         {QStringLiteral("@windowBg"), p.windowBg},
         {QStringLiteral("@text"), p.text},
+        {QStringLiteral("@textMuted"), p.textMuted},
         {QStringLiteral("@strongText"), p.strongText},
         {QStringLiteral("@hoverText"), p.hoverText},
+        {QStringLiteral("@scrollHandleHover"), p.scrollHandleHover},
+        {QStringLiteral("@scrollHandle"), p.scrollHandle},
         {QStringLiteral("@toolbarBg"), p.toolbarBg},
         {QStringLiteral("@toolbarBorder"), p.toolbarBorder},
         {QStringLiteral("@toolbarHover"), p.toolbarHover},

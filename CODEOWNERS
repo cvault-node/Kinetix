@@ -1,0 +1,21 @@
+# Kinetix - CODEOWNERS
+#
+# Propietario del codigo: CuriosVault.
+# Los cambios en el codigo fuente deben ser revisados y aprobados por el
+# propietario antes de mergearse a main. No se aceptan merges directos de
+# terceros sin revision.
+
+# Todo el codigo fuente del navegador (por defecto, el propietario).
+*                       @cvault-node
+
+# La integracion de construccion y empaquetado tambien requiere revision.
+/.github/                @cvault-node
+/packaging/              @cvault-node
+/build_release.ps1      @cvault-node
+/CMakeLists.txt          @cvault-node
+
+# Los archivos de seguridad y licencia solo los modifica el propietario.
+/LICENSE                @cvault-node
+/SECURITY.md            @cvault-node
+/CONTRIBUTING.md           @cvault-node
+/CODEOWNERS             @cvault-node

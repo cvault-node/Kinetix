@@ -45,6 +45,9 @@ Instaladores y paquetes listos para usar en la página de **[Releases](https://g
 - Ventanas emergentes y descargas sin bloqueos.
 - Ajuste avanzado de **RAM, GPU y caché** desde Configuración.
 - Sesión y cookies persistidas en disco.
+- **Administrador de tareas** con el consumo de RAM y CPU de cada pestaña.
+- **Ventana privada** con perfil *off-the-record* (no deja rastro en disco).
+- **Ahorro de datos** (no cargar imágenes) y optimización de vídeo para streaming.
 
 ---
 
@@ -53,6 +56,8 @@ Instaladores y paquetes listos para usar en la página de **[Releases](https://g
 | Atajo | Acción |
 |-------|--------|
 | `Ctrl + T` | Nueva pestaña |
+| `Ctrl + Shift + N` | Nueva ventana privada |
+| `Mayús + Esc` | Administrador de tareas |
 | `Ctrl + W` | Cerrar pestaña |
 | `Ctrl + R` | Recargar |
 | `Alt + ←` / `Alt + →` | Atrás / Adelante |
@@ -80,6 +85,7 @@ Instaladores y paquetes listos para usar en la página de **[Releases](https://g
 - **Compilador C++17** (MSVC 2022 en Windows; GCC/Clang en Linux)
 - **Qt 6.7 o superior** con los módulos **Widgets** y **WebEngineWidgets**
   (en Linux, además `Qt WebChannel`, `Qt Positioning` y `Qt SerialPort`)
+  - Recomendado **Qt 6.11 o superior**: cuanto más nuevo el Qt, más nuevo el motor Chromium y más rápido es el navegador en webs pesadas. Kinetix se compila y distribuye con **Qt 6.11.2 (Chromium 140)**.
 
 ### Windows (MSVC)
 

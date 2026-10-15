@@ -1,64 +1,86 @@
-# ---- Build ----
+# ---------------------------------------------------------------------------
+# Kinetix - .gitignore
+# Solo se sube CODIGO FUENTE. Se excluyen artefactos de compilación,
+# pruebas, registros y ficheros generados por el usuario.
+# ---------------------------------------------------------------------------
+
+# --- Artefactos de compilación / despliegue (NO subir) ---
 /build/
-/build-*/
+/builds/
+/build*/
 /out/
+/dist/
+*.zip
+*.7z
+*.tar.gz
+*.exe
+*.dll
+*.lib
+*.pdb
+*.obj
+*.o
+*.ilk
+*.exp
+*.idb
+*.res
+*.rc
+*.manifest
+
+# --- Qt / CMake ---
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 CTestTestfile.cmake
-install_manifest.txt
-CPackConfig.cmake
-CPackSourceConfig.cmake
-*.cmake.user
-
-# ---- Qt ----
-*.pro.user*
-moc_*.cpp
-moc_*.h
-qrc_*.cpp
-ui_*.h
-*_autogen/
-
-# ---- Binarios / objetos ----
-*.o
-*.obj
-*.a
-*.lib
-*.so
-*.so.*
-*.dylib
-*.exe
-*.dll
-*.pdb
-*.ilk
-*.exp
-
-# ---- Instaladores ----
-*.AppImage
-*.dmg
-*.msi
-*.deb
-_CPack_Packages/
-
-# ---- Respaldos ----
-*.bak
-*.orig
-*~
-
-# ---- IDEs ----
-.vs/
-.vscode/
-.idea/
 *.user
-*.sln
-*.vcxproj
-*.vcxproj.*
-!resources/Kinetix.rc
+*.user.*
+*.qmake.stash
+*.qmlproject.user
+*.pro.user
+CMakeUserPresets.json
+install_manifest.txt
 
-# ---- Sistema ----
-Thumbs.db
-Desktop.ini
+# --- NSIS / instaladores ---
+*.nsi~ 
+*.nsh~ 
+/output/
+
+# --- Scripts de pruebas / medida / compilación (NO subir) ---
+*.ps1
+*.bat
+*.cmd
+*.sh
+
+# --- Registros y temporales (NO subir) ---
+*.log
+*.tmp
+*.bak
+*.swp
+*~
 .DS_Store
+Thumbs.db
+desktop.ini
 
-# ---- Datos de la app ----
-.navegador_personal/
+# --- aqtinstall ---
+aqtinstall/
+*.7z
+aqt*
+
+# --- QtWebEngine runtime profiles (NO subir) ---
+/.navegador_personal/
+*.pak
+QtWebEngine/
+
+# --- Binarios varios ---
+*.apk
+*.app
+*.dmg
+*.so
+*.dylib
+*.a
+
+# --- Editor / IDE ---
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+__pycache__/

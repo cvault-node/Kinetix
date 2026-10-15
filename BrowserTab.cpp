@@ -1,19 +1,27 @@
 #include "BrowserTab.hpp"
+#include "KinetixPage.hpp"
 #include <QWebEnginePage>
 #include <QWebEngineSettings>
 #include <QWebEngineProfile>
 #include <QWebEngineCertificateError>
 #include <QWheelEvent>
 #include <QEvent>
+#include <QDir>
+#include <QSettings>
 
 BrowserTab::BrowserTab(const QString &url, QWebEngineProfile *profile, QWidget *parent)
     : QWidget(parent)
-    , m_page(new QWebEnginePage(profile, this))
+    , m_page(new KinetixPage(profile, this))
     , m_webView(new QWebEngineView(this))
     , m_layout(new QVBoxLayout(this))
 {
     m_webView->setPage(m_page);
-    m_webView->setAttribute(Qt::WA_OpaquePaintEvent, true);
+
+    // Script de detección de enlaces bajo el cursor, con nonce por página
+    // para que una web externa no pueda falsificar la URL de la burbuja.
+    m_page->installHoverScript();
+
+    connect(m_page, &KinetixPage::linkHovered, this, &BrowserTab::linkHovered);
 
     connect(m_page, &QWebEnginePage::certificateError, this,
             [](QWebEngineCertificateError error) {
@@ -26,8 +34,10 @@ BrowserTab::BrowserTab(const QString &url, QWebEngineProfile *profile, QWidget *
             });
 
     QWebEngineSettings *settings = m_webView->settings();
-    settings->setAttribute(QWebEngineSettings::Accelerated2dCanvasEnabled, true);
-    settings->setAttribute(QWebEngineSettings::WebGLEnabled, true);
+    QSettings rec(QDir::homePath() + QStringLiteral("/.navegador_personal/config.ini"), QSettings::IniFormat);
+    const bool gpuOn = rec.value(QStringLiteral("recursos/gpu_acelerado"), true).toBool();
+    settings->setAttribute(QWebEngineSettings::Accelerated2dCanvasEnabled, gpuOn);
+    settings->setAttribute(QWebEngineSettings::WebGLEnabled, gpuOn);
     settings->setAttribute(QWebEngineSettings::PluginsEnabled, false);
     settings->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
     settings->setAttribute(QWebEngineSettings::JavascriptCanOpenWindows, true);

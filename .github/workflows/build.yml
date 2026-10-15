@@ -11,7 +11,9 @@ permissions:
   contents: write
 
 env:
-  QT_VERSION: '6.8.3'
+  # Qt 6.11.x usa un nuevo esquema de repositorio que aqtinstall < 3.4 no soporta.
+  # Si CI falla al instalar Qt 6.11.2, instala Qt manualmente o fija una versión soportada.
+  QT_VERSION: '6.11.2'
   QT_MODULES: 'qtwebengine qtwebchannel qtpositioning qtserialport'
 
 jobs:

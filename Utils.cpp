@@ -10,6 +10,12 @@
 #include <QImage>
 #include <cmath>
 
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#include <psapi.h>
+#include <tlhelp32.h>
+#endif
+
 static const QRegularExpression URL_RE("^(https?://|file://|about:).+", QRegularExpression::CaseInsensitiveOption);
 static const QRegularExpression LOCALHOST_RE("^(https?://)?(localhost|127\\\\.0\\\\.0\\\\.1|0\\\\.0\\\\.0\\\\.0|[0-9]{1,3}(?:\\\\.[0-9]{1,3}){3})(?::[0-9]+)?(/.*)?$", QRegularExpression::CaseInsensitiveOption);
 static const QRegularExpression DOMAIN_RE("^(https?://)?([a-z0-9-]+\\\\.)+[a-z]{2,}(?::[0-9]+)?(/.*)?$", QRegularExpression::CaseInsensitiveOption);
@@ -49,13 +55,18 @@ QString saveFaviconIcon(const QString &url, const QIcon &icon)
     if (icon.isNull()) return QString();
     const QString configDir = QDir::homePath() + QStringLiteral("/.navegador_personal/iconos");
     QDir().mkpath(configDir);
-    const QString fileName = hashUrlForIcon(url);
-    const QString fullPath = configDir + QDir::separator() + fileName;
-    if (QFile::exists(fullPath)) return fullPath;
-    const QPixmap pix = icon.pixmap(QSize(32, 32));
+    const QString fullPath = configDir + QDir::separator() + hashUrlForIcon(url);
+
+    if (QFile::exists(fullPath)) {
+        const QImage existing(fullPath);
+        if (!existing.isNull() && existing.width() >= 64)
+            return fullPath;
+    }
+
+    const QPixmap pix = icon.pixmap(QSize(64, 64));
     if (!pix.isNull() && pix.save(fullPath, "PNG")) return fullPath;
-    const QPixmap pix16 = icon.pixmap(QSize(16, 16));
-    if (!pix16.isNull() && pix16.save(fullPath, "PNG")) return fullPath;
+    const QPixmap pix32 = icon.pixmap(QSize(32, 32));
+    if (!pix32.isNull() && pix32.save(fullPath, "PNG")) return fullPath;
     return QString();
 }
 
@@ -140,4 +151,118 @@ QIcon makeNavIcon(const QString &name, bool dark, const QColor &color)
     QIcon icon;
     icon.addPixmap(renderNavIcon(name, dark, color), QIcon::Normal, QIcon::Off);
     return icon;
+}
+
+namespace {
+QPixmap renderLockIcon(const QString &scheme, bool dark)
+{
+    const int S = 32;
+    QPixmap pm(S, S);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const qreal k = S / 24.0;
+    auto P = [&](qreal x, qreal y) { return QPointF(x * k, y * k); };
+
+    const bool secure = (scheme == QStringLiteral("https"));
+    const bool insecure = (scheme == QStringLiteral("http"));
+    QColor c = secure ? QColor("#54d18c")
+              : insecure ? QColor("#ff7b7b")
+              : (dark ? QColor("#8a8a8a") : QColor("#777777"));
+
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(c, 1.9, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+
+    if (secure || insecure) {
+        // cuerpo del candado
+        QPainterPath body;
+        const QRectF b = QRectF(P(5, 11), QSizeF(14 * k, 10 * k));
+        body.addRoundedRect(b, 2.0 * k, 2.0 * k);
+        p.drawPath(body);
+        // ojo del candado
+        QPainterPath shackle;
+        const qreal cx = 12 * k;
+        const qreal cy = 11 * k;
+        const qreal r = 4.2 * k;
+        if (secure) {
+            shackle.moveTo(cx - r, cy);
+            shackle.arcTo(cx - r, cy - r, 2 * r, 2 * r, 180, -180);
+        } else {
+            // candado abierto: arco desplazado a la derecha
+            shackle.moveTo(cx - r + 3.5 * k, cy);
+            shackle.arcTo(cx - r + 3.5 * k, cy - r, 2 * r, 2 * r, 180, -180);
+        }
+        p.drawPath(shackle);
+    } else {
+        // informacion interna / archivo local: circulo con "i"
+        p.drawEllipse(P(12, 12).x() - 9 * k, P(12, 12).y() - 9 * k, 18 * k, 18 * k);
+        QPainterPath dot;
+        dot.addEllipse(P(12, 7.4).x() - 1.3 * k, P(12, 7.4).y() - 1.3 * k, 2.6 * k, 2.6 * k);
+        p.setBrush(c);
+        p.setPen(Qt::NoPen);
+        p.drawPath(dot);
+        QPainterPath stem;
+        stem.addRoundedRect(QRectF(P(10.7, 11.2), QSizeF(2.6 * k, 7.2 * k)), 1.2 * k, 1.2 * k);
+        p.drawPath(stem);
+    }
+    p.end();
+    return pm;
+}
+} // namespace
+
+QIcon makeLockIcon(const QString &scheme, bool dark)
+{
+    QIcon icon;
+    icon.addPixmap(renderLockIcon(scheme, dark), QIcon::Normal, QIcon::Off);
+    return icon;
+}
+
+QList<ProcSample> sampleKinetixProcesses()
+{
+    QList<ProcSample> out;
+#if defined(Q_OS_WIN)
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return out;
+
+    PROCESSENTRY32 pe;
+    ZeroMemory(&pe, sizeof(pe));
+    pe.dwSize = sizeof(pe);
+
+    if (Process32First(snap, &pe)) {
+        do {
+            const QString name = QString::fromWCharArray(pe.szExeFile);
+            if (name.compare(QStringLiteral("Kinetix.exe"), Qt::CaseInsensitive) != 0
+                && name.compare(QStringLiteral("QtWebEngineProcess.exe"), Qt::CaseInsensitive) != 0)
+                continue;
+
+            ProcSample s;
+            s.pid = pe.th32ProcessID;
+
+            HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+            if (h) {
+                PROCESS_MEMORY_COUNTERS pmc;
+                ZeroMemory(&pmc, sizeof(pmc));
+                if (K32GetProcessMemoryInfo(h, &pmc, sizeof(pmc)))
+                    s.workingSetBytes = static_cast<quint64>(pmc.WorkingSetSize);
+
+                FILETIME ftCreate, ftExit, ftKernel, ftUser;
+                if (GetProcessTimes(h, &ftCreate, &ftExit, &ftKernel, &ftUser)) {
+                    ULARGE_INTEGER k, u;
+                    k.LowPart = ftKernel.dwLowDateTime;
+                    k.HighPart = ftKernel.dwHighDateTime;
+                    u.LowPart = ftUser.dwLowDateTime;
+                    u.HighPart = ftUser.dwHighDateTime;
+                    s.cpu100ns = k.QuadPart + u.QuadPart;
+                }
+                CloseHandle(h);
+            }
+
+            out.append(s);
+        } while (Process32Next(snap, &pe));
+    }
+
+    CloseHandle(snap);
+#endif
+    return out;
 }

@@ -10,6 +10,7 @@
 #include <QIcon>
 
 class QWebEngineProfile;
+class KinetixPage;
 
 class BrowserTab : public QWidget
 {
@@ -33,6 +34,7 @@ signals:
     void pdfFinished(const QString &path, bool success);
     void zoomChanged(BrowserTab *tab);
     void loadingChanged(BrowserTab *tab);
+    void linkHovered(const QString &url);
 
 public slots:
     void savePdfAsync(const QString &path);
@@ -45,7 +47,7 @@ private slots:
     void onIconChanged(const QIcon &icon);
 
 private:
-    QWebEnginePage *m_page;
+    KinetixPage *m_page;
     QWebEngineView *m_webView;
     QVBoxLayout *m_layout;
     bool m_loading = false;

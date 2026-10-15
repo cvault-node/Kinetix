@@ -1,83 +1,58 @@
 # Contribuir a Kinetix
 
-¡Gracias por tu interés en mejorar Kinetix! Estas son las pautas para colaborar.
+Gracias por tu interés en mejorar Kinetix. Este repositorio es de **CuriosVault** y el
+código fuente está protegido por la licencia **MIT** (ver `LICENSE`). Para mantener el
+navegador **seguro y fiable**, todas las contribuciones deben pasar por un proceso de
+revisión antes de publicarse.
 
-## Requisitos
+## Reglas obligatorias
 
-- **CMake** ≥ 3.16
-- **Compilador C++17** (MSVC 2022, GCC o Clang)
-- **Qt 6.7+** con los módulos **Widgets** y **WebEngineWidgets**
-  (en Linux, además `Qt WebChannel`, `Qt Positioning` y `Qt SerialPort`)
-- (Opcional, Windows) **NSIS** para generar el instalador
+1. **Rama `main` está protegida.**
+   - No se permite hacer push directo a `main`.
+   - Todo cambio va por **pull request** desde una rama propia.
 
-## Compilar
+2. **Revisión por el propietario (`@cvault-node`).**
+   - Un propietario debe **aprobar** el pull request antes de mergear.
+   - Los cambios en `packaging/`, `.github/`, `CMakeLists.txt`, `LICENSE`,
+     `SECURITY.md`, `CONTRIBUTING.md` o `CODEOWNERS` **solo** los modifica el propietario.
 
-### Windows (MSVC)
+3. **Comprobación de build.**
+   - El pull request debe compilar en **Release** con Qt 6.11.2 (MSVC 2022 x64).
+   - Si el workflow `Build & Release` falla, el pull request no se mergea.
+
+4. **Seguridad primero.** Ver `SECURITY.md`. En especial:
+   - **No** desactivar ni debilitar Safe Browsing ni la detección de phishing.
+   - **No** añadir peticiones de red ocultas ni telemetría no documentada.
+   - **No** subir credenciales, claves, tokens o datos personales.
+   - **No** subir artefactos de compilación, binarios, registros ni scripts de prueba
+     (el `.gitignore` los excluye; respétalo).
+   - Cualquier cambio en la **identificación del navegador**, cookies, caché o
+     peticiones de red debe justificarse y documentarse.
+
+5. **Calidad del código.**
+   - Código claro, comentado en español (el idioma del proyecto) donde aporte valor.
+   - Sin `TODO` / `FIXME` sin resolver ni código muerto.
+   - No mezclar cambios sin relación en el mismo pull request.
+
+## Flujo recomendado
+
+1. Haz un **fork** del repositorio (o crea una rama si tienes acceso).
+2. Crea una rama descriptiva: `feat/...`, `fix/...`, `security/...`.
+3. Compila y prueba en tu máquina.
+4. Abre un pull request con una descripción clara: qué cambia, por qué, y cómo lo has probado.
+5. Espera la revisión y la aprobación del propietario.
+
+## Build local (referencia)
 
 ```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -G "Visual Studio 18 2026" -A x64 `
+      -DCMAKE_PREFIX_PATH="C:\Qt\6.11.2\msvc2022_64"
 cmake --build build --config Release
 ```
 
-### Linux
+El empaquetado (ZIP portable + instalador NSIS) se genera con `build_release.ps1`,
+pero **ese script no se sube** al repositorio.
 
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j"$(nproc)"
-```
-
-## Estilo de código
-
-- C++17, nombres de clase en `PascalCase` y miembros con prefijo `m_`.
-- Mantén el estilo y la indentación del archivo que edites (4 espacios).
-- **No** añadas comentarios salvo que aclaren algo no evidente.
-- Los colores de la interfaz se centralizan en `Theme.cpp` (`Palette`); no uses
-  literales de color sueltos en otros archivos.
-
-## Convención de commits
-
-Usa mensajes claros y concisos. Recomendado [Conventional Commits](https://www.conventionalcommits.org/es/):
-
-```
-feat: añadir gestor de contraseñas
-fix: corregir cierre de pestaña con la barra lateral activa
-docs: actualizar el README
-refactor: simplificar el despliegue de Qt en CMake
-```
-
-Tipos habituales: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`.
-
-## Flujo de trabajo
-
-1. Crea una rama a partir de `main` (p. ej. `feat/gestor-descargas`).
-2. Realiza tus cambios y comprueba que compila.
-3. Actualiza `CHANGELOG.md` en la sección **Sin publicar** si procede.
-4. Abre un **Pull Request** describiendo el cambio.
-
-## Versionado y releases
-
-El proyecto sigue **SemVer** (`MAYOR.MENOR.PARCHE`):
-
-- `fix` → parche (`1.0.x`)
-- `feat` → menor (`1.x.0`)
-- cambios incompatibles → mayor (`x.0.0`)
-
-Para publicar una versión, actualiza la versión en:
-
-- `CMakeLists.txt` → `project(Kinetix VERSION x.y.z ...)`
-- `main.cpp` → `app.setApplicationVersion("x.y.z")`
-- `resources/Kinetix.rc` → `FILEVERSION` / `PRODUCTVERSION`
-
-Mueve las notas de **Sin publicar** a la nueva versión en `CHANGELOG.md`, y luego:
-
-```bash
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
-
-GitHub Actions compilará y publicará automáticamente el Release para Windows y Linux.
-
-## Reportar problemas
-
-Usa las [plantillas de issue](https://github.com/cvault-node/Kinetix/issues/new/choose).
-Incluye la versión, el sistema operativo y los pasos para reproducirlo.
+> Kinetix es un proyecto de una sola organización. El objetivo es que cualquiera
+> pueda usarlo con confianza; la seguridad del código es responsabilidad de todos,
+> pero la decisión final de publicarla es del propietario.

@@ -16,6 +16,10 @@ struct Palette
     QString strongText;   // texto resaltado (active/checked)
     QString hoverText;    // texto en hover (blanco / negro suave)
 
+    // barras de desplazamiento
+    QString scrollHandle;
+    QString scrollHandleHover;
+
     // colores semánticos de estado (descargas, etc.)
     QString statusOk;
     QString statusWarn;
