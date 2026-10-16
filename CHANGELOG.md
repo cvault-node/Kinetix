@@ -5,9 +5,19 @@ Todos los cambios relevantes de este proyecto se documentan en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y el proyecto sigue el [Versionado Semántico](https://semver.org/lang/es/).
 
-## [1.1.0] - 2026-10-15
+## [1.1.1] - 2026-10-15
 
-### Añadido
+### Corregido
+- **Versión en diálogo "Acerca de"**: corregida versión hardcodeada (era 1.1.0, ahora usa 1.1.1 automáticamente desde CMake).
+- **Rendimiento en Intel UHD 600/620**: flags alineados con Chrome/Edge (`--enable-gpu-rasterization`, `--force-color-profile=srgb`, `--use-angle=d3d11`, `--enable-zero-copy`, `--disable-gpu-driver-bug-workarounds`, Vulkan/Skia/Graphite) → velocidad Chrome/Edge **sin bugs de color**.
+- Modo por defecto: composición por GPU para todos (incluyendo Intel), ya que los nuevos flags corrigen color.
+- Modo software (`softcomp`) desactiva GPU rasterization y zero-copy.
+
+### Cambiado
+- Detección GPU: solo modo software en VM sin GPU D3D11 válida.
+- Flags rendimiento alineados con Chromium upstream: Vulkan, Skia/Graphite, Canvas OOP, zero-copy, sRGB forzado.
+
+## [1.1.0] - 2026-10-15
 
 - **Buscar en la página** (`Ctrl+F`) con contador de coincidencias, navegación entre resultados (`F3`, `Ctrl+G`, `Mayús+Intro`) y cierre con `Esc`.
 - **Reabrir pestaña cerrada** (`Ctrl+Shift+T`), con historial de hasta 30 pestañas cerradas.

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Nombre del proyecto y lenguaje
-project(Kinetix VERSION 1.1.0 LANGUAGES CXX)
+project(Kinetix VERSION 1.1.1 LANGUAGES CXX)
 
 # Estándar de C++
 set(CMAKE_CXX_STANDARD 17)

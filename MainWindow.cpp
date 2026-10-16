@@ -2498,20 +2498,11 @@ void MainWindow::showAbout()
     about.setIcon(QMessageBox::Information);
     about.setText(QStringLiteral("<h2>Kinetix %1</h2>").arg(QCoreApplication::applicationVersion()));
     about.setInformativeText(tr(
-        "<p>Navegador web r&aacute;pido y ligero, desarrollado por <b>CuriosVault</b> en C++ con Qt %1 y Chromium.</p>"
-        "<p><b>Caracter&iacute;sticas:</b><br>"
-        "- Navegaci&oacute;n por pesta&ntilde;as con barra lateral reorganizable<br>"
-        "- Animaciones de carga en las pesta&ntilde;as<br>"
-        "- Descargas con bot&oacute;n de progreso animado<br>"
-        "- Marcadores, historial, modo oscuro y zoom<br>"
-        "- Ventanas emergentes y descargas sin bloqueos<br>"
-        "- Certificados, permisos y contenido seguro gestionados<br>"
-        "- Exportaci&oacute;n a PDF y editor de c&oacute;digo integrado<br>"
-        "- Configuraci&oacute;n avanzada de RAM y GPU<br>"
-        "- Sesi&oacute;n y cookies persistidas en disco<br>"
-        "- Congelaci&oacute;n inteligente de pestañas en segundo plano<br>"
-        "- Favicons de alta resoluci&oacute;n (64x64) en p&aacute;gina de inicio</p>")
-        .arg(QStringLiteral(QT_VERSION_STR)));
+        "<p>Navegador web r&aacute;pido y ligero, desarrollado por <b>CuriosVault</b> en C++ con Qt %2 y Chromium 140.</p>"
+        "<p><a href=\"https://github.com/cvault-node/Kinetix\"><b>GitHub</b></a> | <a href=\"https://github.com/cvault-node/Kinetix/releases\">Descargas</a></p>"
+        "<p>Versi&oacute;n: %1</p>"
+        "<p>Licencia MIT</p>")
+        .arg(QCoreApplication::applicationVersion(), QStringLiteral(QT_VERSION_STR)));
     about.setStandardButtons(QMessageBox::NoButton);
     QPushButton *checkBtn = about.addButton(tr("Buscar actualizaciones"), QMessageBox::ActionRole);
     QPushButton *notesBtn = about.addButton(tr("Ver novedades"), QMessageBox::ActionRole);
@@ -4534,7 +4525,7 @@ void MainWindow::showSettingsDialog()
         prefetch->setChecked(false);
         videoLight->setChecked(true);
         videoHw->setChecked(gpuCompositing);
-        gpuRaster->setChecked(false);
+        gpuRaster->setChecked(gpuCompositing);  // activar GPU raster cuando hay GPU compositing
         gpuComp->setChecked(gpuCompositing);
 
         m_settings->setValue(QStringLiteral("recursos/gpu_acelerado"), true);
@@ -4545,7 +4536,7 @@ void MainWindow::showSettingsDialog()
         m_settings->setValue(QStringLiteral("rendimiento/prefetch"), false);
         m_settings->setValue(QStringLiteral("rendimiento/video_ligero"), true);
         m_settings->setValue(QStringLiteral("rendimiento/video_hw"), gpuCompositing);
-        m_settings->setValue(QStringLiteral("rendimiento/gpu_raster"), false);
+        m_settings->setValue(QStringLiteral("rendimiento/gpu_raster"), gpuCompositing);
         m_settings->setValue(QStringLiteral("rendimiento/composicion_gpu"), gpuCompositing);
         if (m_profile)
             m_profile->setHttpCacheMaximumSize(qint64(256) * 1024 * 1024);
@@ -4554,12 +4545,14 @@ void MainWindow::showSettingsDialog()
         QMessageBox::information(dialog, tr("Configuración óptima aplicada"),
             tr("Se ha aplicado la configuración óptima para este equipo:\n\n"
                "• Renderizado: %1\n"
-               "• Vídeo por hardware: %2\n"
+               "• GPU rasterization: %2 (velocidad + corrección color sRGB)\n"
+               "• Vídeo por hardware: %3\n"
                "• Congelar pestañas en segundo plano: sí\n"
                "• Caché: 256 MB\n\n"
                "Reinicia el navegador para que surta efecto.")
                 .arg(needsSoftware ? tr("composición en software (sin parpadeo)")
                                    : tr("composición por GPU (más rápido)")
+                    , gpuCompositing ? tr("activada") : tr("desactivada")
                     , gpuCompositing ? tr("sí") : tr("no")));
     });
     connect(clearBtn, &QPushButton::clicked, this, [this]() {

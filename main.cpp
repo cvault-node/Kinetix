@@ -77,10 +77,16 @@ int main(int argc, char *argv[])
           << QStringLiteral("--no-default-browser-check")
           << QStringLiteral("--renderer-process-limit=%1").arg(rendererLimit)
           << QStringLiteral("--num-raster-threads=%1").arg(rasterThreads)
-          << QStringLiteral("--enable-features=BackForwardCache,NetworkServiceInProcess,ParallelDownloading")
-          << QStringLiteral("--disable-features=CalculateNativeWinOcclusion,Translate,OptimizationGuideModelDownloading,InterestFeedContentSuggestions,AutofillServerCommunication,MediaRouter,GlobalMediaControls,LoadingWithMojo,SpareRendererForSitePerProcess")
+          // Flags de rendimiento y compatibilidad Intel (Chrome/Edge equivalentes)
+          << QStringLiteral("--enable-features=BackForwardCache,NetworkServiceInProcess,ParallelDownloading,Vulkan,UseSkiaRenderer,CanvasOopRasterization,SkiaGraphite")
+          << QStringLiteral("--disable-features=CalculateNativeWinOcclusion,Translate,OptimizationGuideModelDownloading,InterestFeedContentSuggestions,AutofillServerCommunication,MediaRouter,GlobalMediaControls,LoadingWithMojo,SpareRendererForSitePerProcess,UseChromeOSDirectVideoDecoder")
           << QStringLiteral("--disable-background-networking")
-          << QStringLiteral("--use-gl=angle");
+          << QStringLiteral("--use-gl=angle")
+          << QStringLiteral("--use-angle=d3d11")
+          << QStringLiteral("--force-color-profile=srgb")
+          << QStringLiteral("--enable-gpu-rasterization")
+          << QStringLiteral("--enable-zero-copy")
+          << QStringLiteral("--disable-gpu-driver-bug-workarounds");
 
     // Modo de dispositivo de gama baja (Chromium). Reduce el tamaÃ±o del cachÃ©
     // de imÃ¡genes, el nÃºmero de tiles rasterizados por fotograma, los lÃ­mites
@@ -148,10 +154,11 @@ int main(int argc, char *argv[])
         }
         if (gpuMode == QLatin1String("softcomp")) {
             // ComposiciÃ³n final en software: es el Ãºnico modo sin parpadeo en
-            // este tipo de grÃ¡ficas. NO se combina con rasterizado por GPU
-            // (serÃ­a contradictorio y provocarÃ­a paradas por lectura de
-            // texturas), asÃ­ que se ignora el ajuste gpu_raster.
-            flags << QStringLiteral("--disable-gpu-compositing");
+            // este tipo de grÃ¡ficas. Desactivar rasterizado GPU para evitar
+            // contradicciones (raster GPU + composiciÃ³n SW = copias CPU-GPU).
+            flags << QStringLiteral("--disable-gpu-compositing")
+                  << QStringLiteral("--disable-gpu-rasterization")
+                  << QStringLiteral("--disable-zero-copy");
             // Rasterizado en software: el nÃºmero de hilos sÃ­ influye, asÃ­ que
             // se usan todos los nÃºcleos disponibles en lugar de la mitad.
             flags << QStringLiteral("--num-raster-threads=%1").arg(qBound(1, cores, 4));
@@ -161,13 +168,6 @@ int main(int argc, char *argv[])
             // parpadeos. Se desactivan SOLO ellas: desactivar DirectComposition
             // completo bloqueaba el navegador con el bucle monohilo.
             flags << QStringLiteral("--disable-direct-composition-video-overlays");
-            // El rasterizado por GPU es otra fuente de parpadeos en grÃ¡ficas
-            // Intel antiguas, asÃ­ que solo se usa en el modo "native"
-            // explÃ­cito; el modo "basic" prioriza la estabilidad.
-            if (gpuMode == QLatin1String("native")
-                && rec.value(QStringLiteral("rendimiento/gpu_raster"), false).toBool()) {
-                flags << QStringLiteral("--enable-gpu-rasterization");
-            }
         }
     }
     const qint64 gpuMb = rec.value(QStringLiteral("recursos/memoria_gpu_mb"), 0).toLongLong();
@@ -215,7 +215,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     app.setApplicationName("Kinetix");
     app.setApplicationDisplayName("Kinetix");
-    app.setApplicationVersion("1.1.0");
+    app.setApplicationVersion("1.1.1");
     app.setOrganizationName("CuriosVault");
     app.setOrganizationDomain("curiosvault.dev");
     QIcon appIcon(QStringLiteral(":/icons/Kinetix-ico.ico"));

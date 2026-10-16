@@ -276,24 +276,29 @@ bool hardwarePrefersSoftwareCompositing()
 {
 #if defined(Q_OS_WIN)
     // Solo se consulta el adaptador principal: es el que usa Qt WebEngine para
-    // composicion. Las graficas Intel integradas antiguas son el caso documentado
-    // de parpadeos con el puente DXGI de Qt WebEngine.
+    // composicion. Con los nuevos flags (sRGB, GPU raster, zero-copy, d3d11)
+    // las graficas Intel modernas funcionan bien en GPU. Solo devuelve true
+    // en entornos sin GPU d3d11 valida (p.ej. VM sin GPU passthrough).
     IDXGIFactory1 *factory = nullptr;
     const HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1),
                                            reinterpret_cast<void **>(&factory));
     if (FAILED(hr) || !factory)
         return false;
     IDXGIAdapter1 *adapter = nullptr;
-    bool intel = false;
+    bool needsSoftware = false;
     if (SUCCEEDED(factory->EnumAdapters1(0, &adapter)) && adapter) {
         DXGI_ADAPTER_DESC1 desc;
-        if (SUCCEEDED(adapter->GetDesc1(&desc)))
-            intel = QString::fromWCharArray(desc.Description)
-                        .contains(QStringLiteral("Intel"), Qt::CaseInsensitive);
+        if (SUCCEEDED(adapter->GetDesc1(&desc))) {
+            const QString descStr = QString::fromWCharArray(desc.Description);
+            // Solo software si no hay adaptador D3D11 valido (p.ej. VM sin GPU)
+            needsSoftware = !descStr.contains(QStringLiteral("Intel"), Qt::CaseInsensitive)
+                         && !descStr.contains(QStringLiteral("NVIDIA"), Qt::CaseInsensitive)
+                         && !descStr.contains(QStringLiteral("AMD"), Qt::CaseInsensitive);
+        }
         adapter->Release();
     }
     factory->Release();
-    return intel;
+    return needsSoftware;
 #else
     return false;
 #endif
