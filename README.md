@@ -47,8 +47,6 @@ Instaladores y paquetes listos para usar en la página de **[Releases](https://g
 - Sesión y cookies persistidas en disco.
 - **Administrador de tareas** con el consumo de RAM y CPU de cada pestaña.
 - **Ventana privada** con perfil *off-the-record* (no deja rastro en disco).
-- **Ahorro de datos** (no cargar imágenes) y optimización de vídeo para streaming.
-
 ---
 
 ## Atajos de teclado
