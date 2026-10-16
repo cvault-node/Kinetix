@@ -130,7 +130,7 @@ cpack -G DEB
 
 ## Integración continua
 
-El workflow [`.github/workflows/build.yml`](.github/workflows/build.yml) compila en **Windows** y **Linux** en cada push. Al subir un tag que empiece por `v` (por ejemplo `v1.0.1`) se crea automáticamente un **Release** con el instalador, el ZIP portable y el AppImage.
+El workflow [`.github/workflows/build.yml`](.github/workflows/build.yml) compila en **Windows** y **Linux** manualmente (`workflow_dispatch`). Si es necesario generar un **Release** automático al subir un tag `v*`, se puede habilitar la activación por push — pero actualmente está solo manual para evitar builds fallidos.
 
 ```bash
 git tag v1.0.1
