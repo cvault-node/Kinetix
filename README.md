@@ -1,11 +1,11 @@
-<p align="center">
+﻿<p align="center">
   <img src="resources/icons/Kinetix-ico.png" alt="Kinetix" width="128" height="128">
 </p>
 
 <h1 align="center">Kinetix</h1>
 
 <p align="center">
-  Navegador web rápido y ligero, desarrollado en C++ con <b>Qt 6</b> y <b>Chromium (Qt WebEngine)</b>.
+  Navegador web rÃ¡pido y ligero, desarrollado en C++ con <b>Qt 6</b> y <b>Chromium (Qt WebEngine)</b>.
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
 
 ## Descarga
 
-Instaladores y paquetes listos para usar en la página de **[Releases](https://github.com/cvault-node/Kinetix/releases)**:
+Instaladores y paquetes listos para usar en la pÃ¡gina de **[Releases](https://github.com/cvault-node/Kinetix/releases)**:
 
 | Sistema | Archivo | Tipo |
 |---------|---------|------|
@@ -29,41 +29,41 @@ Instaladores y paquetes listos para usar en la página de **[Releases](https://g
 
 ---
 
-## Características
+## CaracterÃ­sticas
 
-- Navegación por **pestañas** (barra horizontal o **barra lateral**).
-- Animaciones de carga en pestañas e iconos de sitio.
-- **Descargas** con barra de progreso animada, velocidad, tamaño y tiempo restante.
+- NavegaciÃ³n por **pestaÃ±as** (barra horizontal o **barra lateral**).
+- Animaciones de carga en pestaÃ±as e iconos de sitio.
+- **Descargas** con barra de progreso animada, velocidad, tamaÃ±o y tiempo restante.
 - **Marcadores** e **historial** persistentes.
 - **Modo oscuro** y **claro**.
 - **Zoom** con indicador visual.
-- Exportación de páginas a **PDF**.
-- **Editor de código** integrado en una pestaña.
-- Página de **inicio** con accesos rápidos (se pueden renombrar y eliminar).
-- Motores de búsqueda: **Google**, **Bing** y **DuckDuckGo**.
-- Gestión de **certificados, permisos y contenido seguro** (propio de WebEngine).
+- ExportaciÃ³n de pÃ¡ginas a **PDF**.
+- **Editor de cÃ³digo** integrado en una pestaÃ±a.
+- PÃ¡gina de **inicio** con accesos rÃ¡pidos (se pueden renombrar y eliminar).
+- Motores de bÃºsqueda: **Google**, **Bing** y **DuckDuckGo**.
+- GestiÃ³n de **certificados, permisos y contenido seguro** (propio de WebEngine).
 - Ventanas emergentes y descargas sin bloqueos.
-- Ajuste avanzado de **RAM, GPU y caché** desde Configuración.
-- Sesión y cookies persistidas en disco.
-- **Administrador de tareas** con el consumo de RAM y CPU de cada pestaña.
+- Ajuste avanzado de **RAM, GPU y cachÃ©** desde ConfiguraciÃ³n.
+- SesiÃ³n y cookies persistidas en disco.
+- **Administrador de tareas** con el consumo de RAM y CPU de cada pestaÃ±a.
 - **Ventana privada** con perfil *off-the-record* (no deja rastro en disco).
 ---
 
 ## Atajos de teclado
 
-| Atajo | Acción |
+| Atajo | AcciÃ³n |
 |-------|--------|
-| `Ctrl + T` | Nueva pestaña |
+| `Ctrl + T` | Nueva pestaÃ±a |
 | `Ctrl + Shift + N` | Nueva ventana privada |
-| `Mayús + Esc` | Administrador de tareas |
-| `Ctrl + W` | Cerrar pestaña |
+| `MayÃºs + Esc` | Administrador de tareas |
+| `Ctrl + W` | Cerrar pestaÃ±a |
 | `Ctrl + R` | Recargar |
-| `Alt + ←` / `Alt + →` | Atrás / Adelante |
+| `Alt + â†` / `Alt + â†’` | AtrÃ¡s / Adelante |
 | `Ctrl + L` | Ir a la barra de direcciones |
-| `Ctrl + D` | Añadir a marcadores |
+| `Ctrl + D` | AÃ±adir a marcadores |
 | `Ctrl + B` | Mostrar/ocultar barra de marcadores |
 | `Ctrl + P` | Guardar como PDF |
-| `Ctrl + Shift + E` | Editor de código |
+| `Ctrl + Shift + E` | Editor de cÃ³digo |
 | `Ctrl + Shift + D` | Alternar modo oscuro |
 | `Ctrl + Shift + H` | Borrar historial |
 | `Ctrl + +` / `Ctrl + -` | Acercar / Alejar |
@@ -71,19 +71,19 @@ Instaladores y paquetes listos para usar en la página de **[Releases](https://g
 | `F11` / `Esc` | Pantalla completa / salir |
 | `F1` | Acerca de Kinetix |
 
-> **Truco:** en Configuración, escribe el comando `render` (o `recursos`) en el campo *Comando* para mostrar las opciones avanzadas de renderizado.
+> **Truco:** en ConfiguraciÃ³n, escribe el comando `render` (o `recursos`) en el campo *Comando* para mostrar las opciones avanzadas de renderizado.
 
 ---
 
-## Compilar desde el código fuente
+## Compilar desde el cÃ³digo fuente
 
 ### Requisitos
 
-- **CMake** ≥ 3.16
+- **CMake** â‰¥ 3.16
 - **Compilador C++17** (MSVC 2022 en Windows; GCC/Clang en Linux)
-- **Qt 6.7 o superior** con los módulos **Widgets** y **WebEngineWidgets**
-  (en Linux, además `Qt WebChannel`, `Qt Positioning` y `Qt SerialPort`)
-  - Recomendado **Qt 6.11 o superior**: cuanto más nuevo el Qt, más nuevo el motor Chromium y más rápido es el navegador en webs pesadas. Kinetix se compila y distribuye con **Qt 6.11.2 (Chromium 140)**.
+- **Qt 6.7 o superior** con los mÃ³dulos **Widgets** y **WebEngineWidgets**
+  (en Linux, ademÃ¡s `Qt WebChannel`, `Qt Positioning` y `Qt SerialPort`)
+  - Recomendado **Qt 6.11 o superior**: cuanto mÃ¡s nuevo el Qt, mÃ¡s nuevo el motor Chromium y mÃ¡s rÃ¡pido es el navegador en webs pesadas. Kinetix se compila y distribuye con **Qt 6.11.2 (Chromium 140)**.
 
 ### Windows (MSVC)
 
@@ -115,11 +115,11 @@ cpack -C Release -G NSIS   # Kinetix-1.0.0-win64.exe
 cpack -C Release -G ZIP    # Kinetix-1.0.0-win64.zip
 ```
 
-Las dependencias de Qt se despliegan automáticamente con `windeployqt`.
+Las dependencias de Qt se despliegan automÃ¡ticamente con `windeployqt`.
 
 ### Linux (AppImage)
 
-El flujo de CI genera el AppImage con [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) y el plugin de Qt. También puedes crear un paquete `.deb`:
+El flujo de CI genera el AppImage con [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) y el plugin de Qt. TambiÃ©n puedes crear un paquete `.deb`:
 
 ```bash
 cd build
@@ -128,9 +128,9 @@ cpack -G DEB
 
 ---
 
-## Integración continua
+## IntegraciÃ³n continua
 
-El workflow [`.github/workflows/build.yml`](.github/workflows/build.yml) compila en **Windows** y **Linux** manualmente (`workflow_dispatch`). Si es necesario generar un **Release** automático al subir un tag `v*`, se puede habilitar la activación por push — pero actualmente está solo manual para evitar builds fallidos.
+El workflow [`.github/workflows/build.yml`](.github/workflows/build.yml) compila en **Windows** y **Linux** manualmente (`workflow_dispatch`). Si es necesario generar un **Release** automÃ¡tico al subir un tag `v*`, se puede habilitar la activaciÃ³n por push â€” pero actualmente estÃ¡ solo manual para evitar builds fallidos.
 
 ```bash
 git tag v1.0.1
@@ -143,28 +143,28 @@ git push origin v1.0.1
 
 ```
 .
-├── main.cpp            # Punto de entrada y configuración de WebEngine
-├── MainWindow.*        # Ventana principal (pestañas, barra, menús, descargas)
-├── BrowserTab.*        # Pestaña del navegador
-├── CodeEditor.*        # Editor de código integrado
-├── Theme.*             # Paleta de colores centralizada y hoja de estilo
-├── Utils.*             # Utilidades e iconos
-├── resources/          # Iconos y recursos (.qrc, .rc)
-├── packaging/          # Archivos de escritorio para Linux
-└── .github/workflows/  # CI/CD (build y releases)
+â”œâ”€â”€ main.cpp            # Punto de entrada y configuraciÃ³n de WebEngine
+â”œâ”€â”€ MainWindow.*        # Ventana principal (pestaÃ±as, barra, menÃºs, descargas)
+â”œâ”€â”€ BrowserTab.*        # PestaÃ±a del navegador
+â”œâ”€â”€ CodeEditor.*        # Editor de cÃ³digo integrado
+â”œâ”€â”€ Theme.*             # Paleta de colores centralizada y hoja de estilo
+â”œâ”€â”€ Utils.*             # Utilidades e iconos
+â”œâ”€â”€ resources/          # Iconos y recursos (.qrc, .rc)
+â”œâ”€â”€ packaging/          # Archivos de escritorio para Linux
+â””â”€â”€ .github/workflows/  # CI/CD (build y releases)
 ```
 
 ---
 
 ## Datos del usuario
 
-La configuración, el perfil y la caché se guardan en la carpeta del usuario:
+La configuraciÃ³n, el perfil y la cachÃ© se guardan en la carpeta del usuario:
 
 - **Windows / Linux:** `~/.navegador_personal/`
 
 ---
 
-## Tecnologías
+## TecnologÃ­as
 
 - **C++17**
 - **Qt 6** (Widgets) + **Qt WebEngine** (Chromium)
@@ -175,4 +175,5 @@ La configuración, el perfil y la caché se guardan en la carpeta del usuario:
 
 ## Licencia
 
-Sin licencia definida por el momento. Si planeas distribuir o reutilizar el proyecto, añade un archivo `LICENSE` con la licencia que prefieras.
+Sin licencia definida por el momento. Si planeas distribuir o reutilizar el proyecto, aÃ±ade un archivo `LICENSE` con la licencia que prefieras.
+
