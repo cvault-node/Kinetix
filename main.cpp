@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QWebEngineProfile>
+#include <QWebEngineCookieStore>
 #include <QSettings>
 #include <QDir>
 #include <QIcon>
@@ -229,6 +230,29 @@ int main(int argc, char *argv[])
     profile->setPersistentStoragePath(storageDir);
     profile->setPersistentCookiesPolicy(QWebEngineProfile::AllowPersistentCookies);
     profile->setHttpCacheType(QWebEngineProfile::DiskHttpCache);
+
+    // ------------------------------------------------------------------
+    // Cookies de terceros.
+    //
+    // Chromium 140 (Qt 6.11.2) bloquea las cookies de terceros por defecto.
+    // Esto rompe el inicio de sesión con Google en sitios como X/Twitter,
+    // porque el OAuth necesita leer cookies de accounts.google.com desde
+    // el dominio del sitio. Se permite por defecto; el usuario puede
+    // bloquearlas desde Configuración → Privacidad.
+    // ------------------------------------------------------------------
+    const bool blockThirdParty = rec.value(QStringLiteral("privacidad/bloquear_terceros"), false).toBool();
+    if (blockThirdParty) {
+        profile->cookieStore()->setCookieFilter(
+            [](const QWebEngineCookieStore::FilterRequest &request) {
+                return !request.thirdParty;
+            });
+    } else {
+        // Permitir todas las cookies, incluidas las de terceros.
+        profile->cookieStore()->setCookieFilter(
+            [](const QWebEngineCookieStore::FilterRequest &) {
+                return true;
+            });
+    }
     qint64 cacheMb = rec.value(QStringLiteral("recursos/cache_mb"), 256).toLongLong();
     // MigraciÃ³n: 64 MB era el valor por defecto antiguo y quedÃ³ guardado en
     // las configuraciones existentes. Una cachÃ© tan pequeÃ±a obliga a volver a

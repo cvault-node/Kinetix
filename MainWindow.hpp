@@ -104,7 +104,7 @@ private slots:
     void updateNavigationState();
     void updateUrlBarFromCurrent();
     void updateZoomStatus(bool force = false);
-    void registerHistoryOnLoadFinished();
+    void registerHistoryOnLoadFinished(bool ok);
     void updateBookmarksList();
     void updateTabsSidebar();
     void refreshTabLoading();
@@ -253,6 +253,11 @@ private:
 
     QNetworkAccessManager *m_faviconNet = nullptr;
     QSet<QString> m_faviconFetched;
+
+    // Identificador estable por pestaña, usado por el Administrador de Tareas
+    // para referirse a una pestaña sin guardar punteros (que pueden quedar
+    // colgando al cerrarse la pestaña).
+    int m_nextTabId = 1;
 };
 
 #endif // MAINWINDOW_HPP

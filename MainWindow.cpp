@@ -36,6 +36,7 @@
 #include <QWebEngineFullScreenRequest>
 #include <QWebEngineDownloadRequest>
 #include <QWebEngineFindTextResult>
+#include <QWebEngineCertificateError>
 #include <QIcon>
 #include <QPainterPath>
 #include <QTimer>
@@ -1944,7 +1945,7 @@ QString MainWindow::buildHomePage()
         }
 
         tiles += QStringLiteral("<div class=\"tile-w\"><a class=\"tile\" href=\"%1\"><div class=\"icon\">%2</div><div class=\"t\">%3</div></a>"
-                                "<button class=\"dots\" onclick=\"onDots('%5', this)\">&#8942;</button></div>")
+                                "<button class=\"dots\" data-url=\"%4\" onclick=\"onDots(this, event)\" title=\"Opciones\">&#8942;</button></div>")
                     .arg(url.toHtmlEscaped(), iconTag, title.toHtmlEscaped(), url.toHtmlEscaped());
     }
     if (tiles.isEmpty())
@@ -1961,62 +1962,67 @@ QString MainWindow::buildHomePage()
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { margin:0; font-family:"Segoe UI",system-ui,sans-serif; background:#131313;
-         color:#ebebeb; display:flex; flex-direction:column; align-items:center; min-height:100vh; }
-  h1 { font-size:40px; margin:48px 0 2px; letter-spacing:3px;
-       background:linear-gradient(120deg,#5da8ff,#a970ff);
-       -webkit-background-clip:text; -webkit-text-fill-color:transparent; font-weight:700; }
-  .sub { color:#8a8a8a; margin-bottom:24px; font-size:13px; }
-  form { width:min(640px,90vw); display:flex; margin-bottom:34px; }
-  input { flex:1; padding:14px 18px; font-size:16px; border-radius:12px 0 0 12px;
+  body { margin:0; padding:0 16px; font-family:"Segoe UI",system-ui,sans-serif;
+         background:#131313; color:#ebebeb; display:flex; flex-direction:column;
+         align-items:center; min-height:100vh; overflow-x:hidden; }
+  h1 { font-size:36px; margin:56px 0 4px; font-weight:600; letter-spacing:2px; color:#ebebeb; }
+  .sub { color:#8a8a8a; margin-bottom:28px; font-size:13px; }
+  form { width:min(620px,100%); display:flex; margin-bottom:40px; }
+  input { flex:1; min-width:0; padding:14px 18px; font-size:16px; border-radius:10px 0 0 10px;
           border:1px solid #2e2e2e; background:#1b1b1b; color:#f0f0f0; outline:none; }
   input:focus { border-color:#5da8ff; }
-  button { padding:0 24px; font-size:15px; border:none; cursor:pointer;
-           border-radius:0 12px 12px 0; background:#5da8ff; color:#06131f; font-weight:600; }
-  h2 { width:min(820px,90vw); font-size:12px; text-transform:uppercase; letter-spacing:2px;
-       color:#7a7a7a; margin:6px 0 12px; }
-.grid { width:min(800px,90vw); display:grid;
-          grid-template-columns:repeat(6, 1fr); grid-template-rows:repeat(2, 110px); gap:10px; margin-bottom:32px; }
-  .tile-w { position:relative; height:110px; }
-  .tile { display:flex; flex-direction:column; align-items:center; gap:5px; padding:12px 6px 10px;
+  button { padding:0 22px; font-size:15px; border:none; cursor:pointer;
+           border-radius:0 10px 10px 0; background:#5da8ff; color:#06131f; font-weight:600; }
+  h2 { width:min(760px,100%); font-size:12px; text-transform:uppercase; letter-spacing:2px;
+       color:#7a7a7a; margin:0 0 14px; }
+  .grid { width:min(760px,100%); display:grid;
+          grid-template-columns:repeat(auto-fill, minmax(104px, 1fr)); gap:10px; margin-bottom:40px; }
+  .tile-w { position:relative; }
+  .tile { display:flex; flex-direction:column; align-items:center; gap:6px; padding:12px 6px;
           text-decoration:none; color:#ebebeb; background:#1b1b1b; border:1px solid #2a2a2a;
-          border-radius:12px; transition:border-color .08s, background .08s; width:100%; height:110px; box-sizing:border-box; }
+          border-radius:10px; transition:border-color .1s, background .1s; height:104px; overflow:hidden; }
   .tile:hover { border-color:#5da8ff; background:#1f1f1f; }
-  .icon { width:52px; height:52px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-  .icon img { width:52px; height:52px; border-radius:10px; object-fit:contain; }
-  .icon-fallback { width:52px; height:52px; border-radius:10px; background:#232323;
-                    color:#8a8a8a; display:flex; align-items:center; justify-content:center; font-size:22px; font-weight:600; }
+  .icon { width:44px; height:44px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .icon img { width:44px; height:44px; border-radius:8px; object-fit:contain; }
+  .icon-fallback { width:44px; height:44px; border-radius:8px; background:#232323;
+                    color:#8a8a8a; display:flex; align-items:center; justify-content:center; font-size:20px; font-weight:600; }
   .t { font-size:11px; font-weight:600; width:100%; text-align:center;
        display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
-       line-height:1.3; max-height:2.6em; }
-  .dots { position:absolute; top:6px; right:6px; width:22px; height:22px; padding:0;
-          border:none; border-radius:6px; background:transparent; color:#8a8a8a;
-          font-size:13px; cursor:pointer; opacity:0; transition:opacity .08s; }
+       line-height:1.25; max-height:2.5em; word-break:break-word; }
+  .dots { position:absolute; top:5px; right:5px; width:20px; height:20px; padding:0;
+          border:none; border-radius:5px; background:transparent; color:#8a8a8a;
+          font-size:13px; line-height:1; cursor:pointer; opacity:0; transition:opacity .1s; }
   .tile-w:hover .dots { opacity:1; }
   .dots:hover { background:#2c2c2c; color:#ffffff; }
   .menu { display:none; position:fixed; z-index:9; background:#242424;
-          border:1px solid #3a3a3a; border-radius:12px;
-          box-shadow:0 10px 30px rgba(0,0,0,0.6); min-width:150px; overflow:hidden; }
-  .menu button { display:block; width:100%; padding:11px 18px; border:none; background:transparent;
-                 color:#ebebeb; text-align:left; cursor:pointer; font-size:13px; }
+          border:1px solid #3a3a3a; border-radius:10px;
+          box-shadow:0 8px 24px rgba(0,0,0,0.6); min-width:140px; overflow:hidden; }
+  .menu button { display:block; width:100%; padding:10px 16px; border:none; background:transparent;
+                 color:#ebebeb; text-align:left; cursor:pointer; font-size:13px; border-radius:0; }
   .menu button:hover { background:#2f6fbf; color:#ffffff; }
   .empty { color:#6f6f6f; font-size:13px; margin-bottom:44px; }
-
 </style>
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script>
   new QWebChannel(qt.webChannelTransport, function(channel){ window.kinetix = channel.objects.kinetix; });
   var pending = '';
-  function onDots(url, btn){
-    pending = url;
+  function onDots(btn, ev){
+    pending = btn.getAttribute('data-url') || '';
     var m = document.getElementById('menu');
     m.style.display = 'block';
+    m.style.left = '0px';
+    m.style.top = '0px';
     var r = btn.getBoundingClientRect();
-    var left = r.left + 26;
-    if (left + m.offsetWidth > innerWidth) left = innerWidth - m.offsetWidth - 6;
+    var mw = m.offsetWidth, mh = m.offsetHeight;
+    var left = r.right - mw;
+    if (left < 6) left = 6;
+    if (left + mw > innerWidth - 6) left = innerWidth - mw - 6;
+    var top = r.bottom + 4;
+    if (top + mh > innerHeight - 6) top = r.top - mh - 4;
+    if (top < 6) top = 6;
     m.style.left = left + 'px';
-    m.style.top = r.top + 'px';
-    event.stopPropagation();
+    m.style.top = top + 'px';
+    if (ev) ev.stopPropagation();
   }
   function hideMenu(){ document.getElementById('menu').style.display = 'none'; }
   document.addEventListener('click', function(e){
@@ -2044,6 +2050,8 @@ QString MainWindow::buildHomePage()
 BrowserTab *MainWindow::newTab(const QString &url)
 {
     BrowserTab *tab = new BrowserTab(QString(), m_profile, this);
+    // ID estable para el Administrador de Tareas (evita punteros colgantes).
+    tab->setProperty("kinetixTabId", m_nextTabId++);
     connect(tab, &BrowserTab::titleChanged, this, &MainWindow::onTabTitleChanged);
     connect(tab, &BrowserTab::faviconChanged, this, &MainWindow::onTabFaviconChanged);
     connect(tab, &BrowserTab::pdfFinished, this, &MainWindow::onPdfFinished);
@@ -2067,19 +2075,76 @@ BrowserTab *MainWindow::newTab(const QString &url)
             });
     connect(page, &QWebEnginePage::newWindowRequested, this,
             [this](QWebEngineNewWindowRequest &request) {
-        const QUrl requested = request.requestedUrl();
-        if (requested.isEmpty() || !requested.isValid())
-            return;
-
         // Política de ventanas emergentes: solo se permiten si el usuario inicia
         // la acción (clic, tecla). Las aperturas automáticas se ignoran.
         if (!request.isUserInitiated()) {
             return;
         }
 
-        BrowserTab *nt = newTab(requested.toString());
-        if (nt)
-            request.openIn(nt->webView()->page());
+        const QUrl requested = request.requestedUrl();
+
+        // Diferencia entre un login (window.open con tamaño -> ventana
+        // emergente real) y un enlace normal target="_blank" (nueva pestaña).
+        // Los logins OAuth necesitan una ventana de verdad: usan window.close()
+        // al terminar y en una pestaña eso no funciona.
+        const QWebEngineNewWindowRequest::DestinationType dest = request.destination();
+        const bool wantWindow = (dest == QWebEngineNewWindowRequest::InNewWindow
+                                 || dest == QWebEngineNewWindowRequest::InNewDialog);
+
+        // Los popups de login pueden abrirse con 'about:blank' o URL vacía y
+        // navegar después; esos se permiten. Los enlaces normales deben ser URL
+        // válidas.
+        if (!wantWindow && (requested.isEmpty() || !requested.isValid()))
+            return;
+
+        if (!wantWindow) {
+            // Enlace normal: se abre como pestaña del navegador.
+            BrowserTab *nt = newTab(QString());
+            if (nt)
+                request.openIn(nt->webView()->page());
+            return;
+        }
+
+        // Ventana emergente real (login, OAuth, popups con tamaño definido).
+        auto *popup = new QDialog(this);
+        popup->setAttribute(Qt::WA_DeleteOnClose);
+        // Tamaño pedido por la web si lo indica; si no, uno razonable.
+        const QRect geom = request.requestedGeometry();
+        popup->resize(geom.isValid() && geom.width() > 200 ? geom.size() : QSize(520, 640));
+
+        auto *popupView = new QWebEngineView(popup);
+        // Usar el mismo perfil que el navegador principal para que las
+        // cookies y la sesión se compartan con la ventana emergente.
+        auto *popupPage = new QWebEnginePage(m_profile, popup);
+        popupView->setPage(popupPage);
+        auto *popupLayout = new QVBoxLayout(popup);
+        popupLayout->setContentsMargins(0, 0, 0, 0);
+        popupLayout->addWidget(popupView);
+
+        request.openIn(popupPage);
+
+        // Si la web pide cerrarse (window.close), se cierra la ventana.
+        connect(popupPage, &QWebEnginePage::windowCloseRequested,
+                popup, &QDialog::accept);
+
+        // El título de la ventana refleja el título de la página.
+        connect(popupPage, &QWebEnginePage::titleChanged,
+                popup, &QDialog::setWindowTitle);
+
+        // Mismos criterios de seguridad que las pestañas normales: se rechazan
+        // certificados inválidos y los permisos (cámara, ubicación...) se
+        // deniegan salvo que el usuario los conceda explícitamente.
+        connect(popupPage, &QWebEnginePage::certificateError, this,
+                [](QWebEngineCertificateError error) {
+                    error.rejectCertificate();
+                });
+        connect(popupPage, &QWebEnginePage::featurePermissionRequested, this,
+                [popupPage](const QUrl &origin, QWebEnginePage::Feature feature) {
+                    popupPage->setFeaturePermission(origin, feature,
+                                                    QWebEnginePage::PermissionDeniedByUser);
+                });
+
+        popup->show();
     });
 
     // Pantalla completa pedida por la propia web (botón de YouTube, etc.).
@@ -2098,6 +2163,27 @@ BrowserTab *MainWindow::newTab(const QString &url)
             m_webFullscreenPage = nullptr;
             exitFullscreen();
         }
+    });
+
+    // El proceso de renderizado se cayó (sin memoria, fallo del motor...).
+    // Sin esto la pestaña queda muerta en blanco sin explicación. Se avisa
+    // y se recarga automáticamente.
+    connect(page, &QWebEnginePage::renderProcessTerminated, this,
+            [this, page, tab](QWebEnginePage::RenderProcessTerminationStatus status, int exitCode) {
+        Q_UNUSED(status);
+        Q_UNUSED(exitCode);
+        // Solo si la pestaña sigue existiendo y no se está cerrando.
+        if (!m_tabs || m_tabs->indexOf(tab) < 0)
+            return;
+        const QString url = page->url().toString();
+        QMessageBox::warning(this, tr("La página dejó de responder"),
+            tr("Se interrumpió el proceso de esta pestaña (normalmente por falta de "
+               "memoria). Se recargará la página.\n\nSi el problema se repite, cierra "
+               "otras pestañas para liberar memoria."));
+        if (!url.isEmpty() && url.startsWith(QStringLiteral("http")))
+            page->setUrl(QUrl(url));
+        else
+            page->triggerAction(QWebEnginePage::Reload);
     });
 
     // Puente nativo: el objeto solo se registra en la página mientras muestra
@@ -4253,8 +4339,31 @@ void MainWindow::showSettingsDialog()
     auto *clearAllBtn = new QPushButton(tr("Borrar todos los datos de navegación…"), privacy);
     auto *doNotTrack = new QCheckBox(tr("Enviar cabecera \"Do Not Track\""), privacy);
     doNotTrack->setChecked(m_settings->value("privacidad/dnt", false).toBool());
-    auto *blockThirdParty = new QCheckBox(tr("Bloquear cookies de terceros"), privacy);
+    auto *blockThirdParty = new QCheckBox(
+        tr("Bloquear cookies de terceros (PELIGRO: puede romper inicio de sesión)"), privacy);
     blockThirdParty->setChecked(m_settings->value("privacidad/bloquear_terceros", false).toBool());
+    blockThirdParty->setToolTip(tr(
+        "Al activar esta opción, Chromium dejará de aceptar cookies que otros "
+        "sitios (como Google, YouTube o X) intentan guardar. Esto ROMPE el "
+        "inicio de sesión con cuentas de Google en sitios de terceros y puede "
+        "causar errores en muchos servicios web.\n\n"
+        "Solo actívela si sabe lo que hace. Se aplica inmediatamente."));
+    // Estilo rojo/ámbar para que se vea como opción peligrosa.
+    blockThirdParty->setStyleSheet(QStringLiteral(
+        "QCheckBox { color: #c0392b; font-weight: bold; }"
+        "QCheckBox:hover { color: #e74c3c; }"));
+
+    // Confirmación al activar: si el usuario lo hace, se le avisa del riesgo.
+    connect(blockThirdParty, &QCheckBox::toggled, privacy, [privacy](bool checked) {
+        if (!checked)
+            return;
+        QMessageBox::warning(privacy, tr("Cookies de terceros"),
+            tr("Si bloquea las cookies de terceros:\n\n"
+               "• El inicio de sesión con Google en sitios como X dejará de funcionar.\n"
+               "• Muchos servicios web mostrarán errores o pedirán iniciar sesión otra vez.\n"
+               "• Algunas páginas no cargarán correctamente.\n\n"
+               "¿Seguro que quiere activar esta opción?"));
+    });
 
     auto *privInfo = new QLabel(tr(
         "<b>Qué guarda Kinetix y dónde</b><br>"
@@ -4454,6 +4563,22 @@ void MainWindow::showSettingsDialog()
 
         m_settings->setValue(QStringLiteral("privacidad/dnt"), doNotTrack->isChecked());
         m_settings->setValue(QStringLiteral("privacidad/bloquear_terceros"), blockThirdParty->isChecked());
+
+        // Aplicar el filtro de cookies de terceros en tiempo real.
+        if (m_profile && m_profile->cookieStore()) {
+            const bool block = blockThirdParty->isChecked();
+            if (block) {
+                m_profile->cookieStore()->setCookieFilter(
+                    [](const QWebEngineCookieStore::FilterRequest &request) {
+                        return !request.thirdParty;
+                    });
+            } else {
+                m_profile->cookieStore()->setCookieFilter(
+                    [](const QWebEngineCookieStore::FilterRequest &) {
+                        return true;
+                    });
+            }
+        }
 
         const bool newGpu = chkGpu->isChecked();
         const int newGpuMb = spGpuMb->value();
@@ -4690,7 +4815,7 @@ void MainWindow::showTaskManager()
         };
 
         // Agrupa las pestañas por proceso de renderizado.
-        struct TabInfo { BrowserTab *tab; QString title; QString site; };
+        struct TabInfo { int id; QString title; QString site; };
         QMap<quint64, QList<TabInfo>> groups;
         int browserTabCount = 0;
         for (int i = 0; i < m_tabs->count(); ++i) {
@@ -4702,7 +4827,7 @@ void MainWindow::showTaskManager()
             const QString title = m_tabs->tabText(i).trimmed();
             const QUrl u = bt->webView()->url();
             TabInfo info;
-            info.tab = bt;
+            info.id = bt->property("kinetixTabId").toInt();
             info.title = title.isEmpty() ? tr("(sin título)") : title;
             info.site = u.host().isEmpty() ? (u.scheme().isEmpty() ? QStringLiteral("—") : u.scheme())
                                            : u.host();
@@ -4766,8 +4891,7 @@ void MainWindow::showTaskManager()
                 auto *it = new QTreeWidgetItem(tree);
                 it->setData(0, kKeyRole, QStringLiteral("proc:%1").arg(pid));
                 it->setData(0, kPidRole, QVariant::fromValue<qulonglong>(pid));
-                it->setData(0, kTabRole, QVariant::fromValue<qulonglong>(
-                    static_cast<qulonglong>(reinterpret_cast<quintptr>(t.tab))));
+                it->setData(0, kTabRole, QVariant::fromValue<qulonglong>(static_cast<qulonglong>(t.id)));
                 fill(it, t.title, t.site, QString::number(pid),
                      memText(s.workingSetBytes), cpuText(pct.value(pid, -1.0)));
             } else {
@@ -4779,9 +4903,8 @@ void MainWindow::showTaskManager()
                      memText(s.workingSetBytes), cpuText(pct.value(pid, -1.0)));
                 for (const TabInfo &t : list) {
                     auto *child = new QTreeWidgetItem(parent);
-                    const qulonglong tabPtr = static_cast<qulonglong>(reinterpret_cast<quintptr>(t.tab));
-                    child->setData(0, kKeyRole, QStringLiteral("tab:%1:%2").arg(pid).arg(tabPtr));
-                    child->setData(0, kTabRole, QVariant::fromValue<qulonglong>(tabPtr));
+                    child->setData(0, kKeyRole, QStringLiteral("tab:%1:%2").arg(pid).arg(t.id));
+                    child->setData(0, kTabRole, QVariant::fromValue<qulonglong>(static_cast<qulonglong>(t.id)));
                     fill(child, t.title, t.site, QString(), QString(), QString());
                 }
             }
@@ -4850,20 +4973,26 @@ void MainWindow::showTaskManager()
 
     connect(tree, &QTreeWidget::itemSelectionChanged, dlg, updateButtons);
 
+    // Busca la pestaña actual cuyo ID coincide; devuelve su índice o -1.
+    auto findTabById = [this](int id) -> int {
+        if (id <= 0)
+            return -1;
+        for (int i = 0; i < m_tabs->count(); ++i) {
+            auto *bt = qobject_cast<BrowserTab *>(m_tabs->widget(i));
+            if (bt && bt->property("kinetixTabId").toInt() == id)
+                return i;
+        }
+        return -1;
+    };
+
     connect(tree, &QTreeWidget::itemDoubleClicked, dlg,
-            [this, kTabRole](QTreeWidgetItem *item, int) {
+            [this, kTabRole, findTabById](QTreeWidgetItem *item, int) {
         if (!item)
             return;
-        auto *target = reinterpret_cast<BrowserTab *>(
-            static_cast<quintptr>(item->data(0, kTabRole).toULongLong()));
-        if (!target)
-            return;
-        for (int i = 0; i < m_tabs->count(); ++i) {
-            if (m_tabs->widget(i) == target) {
-                m_tabs->setCurrentIndex(i);
-                return;
-            }
-        }
+        const int id = static_cast<int>(item->data(0, kTabRole).toULongLong());
+        const int idx = findTabById(id);
+        if (idx >= 0)
+            m_tabs->setCurrentIndex(idx);
     });
 
     connect(closeProc, &QPushButton::clicked, dlg, [this, tree, kPidRole]() {
@@ -4881,20 +5010,14 @@ void MainWindow::showTaskManager()
         }
     });
 
-    connect(closeTabBtn, &QPushButton::clicked, dlg, [this, tree, kTabRole]() {
+    connect(closeTabBtn, &QPushButton::clicked, dlg, [this, tree, kTabRole, findTabById]() {
         QTreeWidgetItem *item = tree->currentItem();
         if (!item)
             return;
-        auto *target = reinterpret_cast<BrowserTab *>(
-            static_cast<quintptr>(item->data(0, kTabRole).toULongLong()));
-        if (!target)
-            return;
-        for (int i = 0; i < m_tabs->count(); ++i) {
-            if (m_tabs->widget(i) == target) {
-                closeTab(i);
-                return;
-            }
-        }
+        const int id = static_cast<int>(item->data(0, kTabRole).toULongLong());
+        const int idx = findTabById(id);
+        if (idx >= 0)
+            closeTab(idx);
     });
 
     connect(closeBtn, &QPushButton::clicked, dlg, &QDialog::close);
@@ -4932,8 +5055,14 @@ void MainWindow::updateUrlBarFromCurrent()
     updateStatusBarState();
 }
 
-void MainWindow::registerHistoryOnLoadFinished()
+void MainWindow::registerHistoryOnLoadFinished(bool ok)
 {
+    // No se registra en el historial una navegación que falló (sin conexión,
+    // DNS, timeout, certificado rechazado, 404...). De lo contrario el
+    // historial y "Más visitados" se llenan de entradas inválidas.
+    if (!ok)
+        return;
+
     BrowserTab *tab = qobject_cast<BrowserTab *>(m_tabs->currentWidget());
     if (!tab)
         return;
