@@ -8,6 +8,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QImage>
+#include <QStringList>
 #include <cmath>
 
 #if defined(Q_OS_WIN)
@@ -17,8 +18,42 @@
 #endif
 
 static const QRegularExpression URL_RE("^(https?://|file://|about:).+", QRegularExpression::CaseInsensitiveOption);
-static const QRegularExpression LOCALHOST_RE("^(https?://)?(localhost|127\\\\.0\\\\.0\\\\.1|0\\\\.0\\\\.0\\\\.0|[0-9]{1,3}(?:\\\\.[0-9]{1,3}){3})(?::[0-9]+)?(/.*)?$", QRegularExpression::CaseInsensitiveOption);
-static const QRegularExpression DOMAIN_RE("^(https?://)?([a-z0-9-]+\\\\.)+[a-z]{2,}(?::[0-9]+)?(/.*)?$", QRegularExpression::CaseInsensitiveOption);
+// OJO con el escapado: dentro de un literal de C++ el punto de la regex
+// necesita "\\." (una sola barra invertida en la cadena final). Con "\\\\."
+// la regex buscava una barra invertida literal y NUNCA casaba con un dominio:
+// escribir "ejemplo.com" en la barra de direcciones hacia una busqueda en
+// Google en vez de navegar a la pagina.
+static const QRegularExpression LOCALHOST_RE("^(https?://)?(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|[0-9]{1,3}(?:\\.[0-9]{1,3}){3})(?::[0-9]+)?(/.*)?$", QRegularExpression::CaseInsensitiveOption);
+static const QRegularExpression DOMAIN_RE("^(https?://)?([a-z0-9-]+\\.)+[a-z]{2,}(?::[0-9]+)?(/.*)?$", QRegularExpression::CaseInsensitiveOption);
+
+// "notas.txt", "leeme.md" o "datos.json" tienen forma de dominio (algo.algo)
+// pero son nombres de archivo: tratarlos como URL hacia que el navegador
+// intenta resolver un host que no existe.
+static bool looksLikeFileName(const QString &text)
+{
+    if (text.contains(QLatin1Char('/')) || text.contains(QLatin1Char('\\'))
+        || text.contains(QLatin1Char(':')))
+        return false;
+    const int dot = text.lastIndexOf(QLatin1Char('.'));
+    if (dot <= 0 || dot == text.size() - 1)
+        return false;
+    static const QStringList extensions = {
+        QStringLiteral("txt"),  QStringLiteral("md"),   QStringLiteral("pdf"),
+        QStringLiteral("doc"),  QStringLiteral("docx"), QStringLiteral("odt"),
+        QStringLiteral("xls"),  QStringLiteral("xlsx"), QStringLiteral("csv"),
+        QStringLiteral("ppt"),  QStringLiteral("pptx"), QStringLiteral("json"),
+        QStringLiteral("xml"),  QStringLiteral("html"), QStringLiteral("htm"),
+        QStringLiteral("zip"),  QStringLiteral("rar"),  QStringLiteral("7z"),
+        QStringLiteral("png"),  QStringLiteral("jpg"),  QStringLiteral("jpeg"),
+        QStringLiteral("gif"),  QStringLiteral("svg"),  QStringLiteral("webp"),
+        QStringLiteral("exe"),  QStringLiteral("msi"),  QStringLiteral("deb"),
+        QStringLiteral("cpp"),  QStringLiteral("hpp"),  QStringLiteral("h"),
+        QStringLiteral("c"),    QStringLiteral("py"),   QStringLiteral("js"),
+        QStringLiteral("css"),  QStringLiteral("log"),  QStringLiteral("bak"),
+        QStringLiteral("yml"),  QStringLiteral("yaml"), QStringLiteral("ini")
+    };
+    return extensions.contains(text.mid(dot + 1).toLower());
+}
 
 bool isValidUrl(const QString &text)
 {
@@ -26,14 +61,26 @@ bool isValidUrl(const QString &text)
     if (t.isEmpty()) return false;
     if (URL_RE.match(t).hasMatch()) return true;
     if (LOCALHOST_RE.match(t).hasMatch()) return true;
-    if (DOMAIN_RE.match(t).hasMatch()) return true;
+    if (DOMAIN_RE.match(t).hasMatch() && !looksLikeFileName(t)) return true;
     return false;
 }
 
-QString getDestinationUrl(const QString &text)
+QString getDestinationUrl(const QString &text, const QString &engine)
 {
     const QString t = text.trimmed();
-    if (t.isEmpty()) return QStringLiteral("https://www.google.com");
+    // Motor configurado por el usuario: se respeta tambien en la barra de
+    // direcciones, no solo en la pagina de inicio.
+    QString home = QStringLiteral("https://www.google.com");
+    QString searchBase = QStringLiteral("https://www.google.com/search?q=");
+    if (engine.compare(QStringLiteral("Bing"), Qt::CaseInsensitive) == 0) {
+        home = QStringLiteral("https://www.bing.com");
+        searchBase = QStringLiteral("https://www.bing.com/search?q=");
+    } else if (engine.compare(QStringLiteral("DuckDuckGo"), Qt::CaseInsensitive) == 0) {
+        home = QStringLiteral("https://duckduckgo.com");
+        searchBase = QStringLiteral("https://duckduckgo.com/?q=");
+    }
+
+    if (t.isEmpty()) return home;
     if (isValidUrl(t)) {
         if (t.startsWith("http://", Qt::CaseInsensitive) || t.startsWith("https://", Qt::CaseInsensitive) || t.startsWith("file://", Qt::CaseInsensitive) || t.startsWith("about:", Qt::CaseInsensitive)) {
             return t;
@@ -41,7 +88,7 @@ QString getDestinationUrl(const QString &text)
         return QStringLiteral("https://") + t;
     }
     const QByteArray encoded = QUrl::toPercentEncoding(t);
-    return QStringLiteral("https://www.google.com/search?q=") + QString::fromUtf8(encoded);
+    return searchBase + QString::fromUtf8(encoded);
 }
 
 QString hashUrlForIcon(const QString &url)
@@ -98,30 +145,24 @@ QPixmap renderNavIcon(const QString &name, bool dark, const QColor &color)
         p.drawPath(path);
     };
     auto arc = [&](qreal cx, qreal cy, qreal r, qreal startDeg, qreal sweepDeg) {
-        QVector<QPointF> pts;
         const int steps = 72;
+        QVector<QPointF> pts;
+        pts.reserve(steps + 1);
         for (int i = 0; i <= steps; i++) {
-            qreal a = (startDeg + sweepDeg * qreal(i) / steps) * M_PI / 180.0;
-            pts.append(QPointF(cx, cy));
+            const qreal a = (startDeg + sweepDeg * qreal(i) / steps) * M_PI / 180.0;
+            pts.append(QPointF(cx + r * std::cos(a), cy + r * std::sin(a)));
         }
-        // simple
-        QPainterPath path;
-        qreal a0 = startDeg * M_PI / 180.0;
-        path.arcMoveTo(P(cx-r, cy-r).x(), P(cx-r, cy-r).y(), 2*r*k, 2*r*k, startDeg);
-        for (int i = 1; i <= steps; i++) {
-            qreal a = (startDeg + sweepDeg * qreal(i) / steps) * M_PI / 180.0;
-            QPointF cpt = P(cx, cy);
-            QPointF rpt = P(cx + r * cos(a), cy + r * sin(a));
-            // approximate via draw
-        }
+        poly(pts);
     };
     if (name == "back") {
         poly({QPointF(15, 18), QPointF(9, 12), QPointF(15, 6)});
     } else if (name == "forward") {
         poly({QPointF(9, 18), QPointF(15, 12), QPointF(9, 6)});
     } else if (name == "reload") {
-        p.drawEllipse(P(12, 12).x() - 9*k, P(12, 12).y() - 9*k, 18*k, 18*k);
-        QPainterPath ah; ah.moveTo(P(14.6, 3)); ah.lineTo(P(17.8, 3)); ah.lineTo(P(17.8, 6.2)); p.drawPath(ah);
+        // Arco de 270 grados con punta de flecha: un circulo completo con un
+        // corchete suelto no se reconocia como "recargar".
+        arc(12, 12, 9, 0, 270);
+        poly({QPointF(10.6, 1.2), QPointF(14.4, 3.0), QPointF(10.6, 4.8)});
     } else if (name == "home") {
         poly({QPointF(3,10), QPointF(12,3), QPointF(21,10), QPointF(21,21), QPointF(3,21), QPointF(3,10)});
         poly({QPointF(9,21), QPointF(9,14.5), QPointF(15,14.5), QPointF(15,21)});
@@ -136,10 +177,30 @@ QPixmap renderNavIcon(const QString &name, bool dark, const QColor &color)
     } else if (name == "favorites") {
         QVector<QPointF> pts;
         for (int i=0; i<10; i++) { qreal ang=-M_PI/2+i*M_PI/5; qreal r=i%2?4.1:9.4; pts.append(QPointF(12+r*cos(ang), 12+r*sin(ang))); }
+        // poly() no cierra el contorno: hay que volver al primer punto para
+        // que la estrella no salga abierta por un lado.
+        pts.append(pts.first());
         poly(pts);
     } else if (name == "plus") {
         poly({QPointF(12,4), QPointF(12,20)});
         poly({QPointF(4,12), QPointF(20,12)});
+    } else if (name == "check" || name == "progress" || name == "cancel" || name == "error") {
+        // Iconos de estado de las descargas: sin estos la columna de estado
+        // del panel y del dialogo sale en blanco.
+        const qreal cx = 12, cy = 12, rr = 9;
+        p.drawEllipse(P(cx, cy).x() - rr * k, P(cx, cy).y() - rr * k, 2 * rr * k, 2 * rr * k);
+        if (name == "check") {
+            poly({QPointF(7.6, 12.4), QPointF(10.7, 15.5), QPointF(16.4, 8.6)});
+        } else if (name == "progress") {
+            poly({QPointF(12, 7.4), QPointF(12, 16)});
+            poly({QPointF(8.7, 12.7), QPointF(12, 16), QPointF(15.3, 12.7)});
+        } else if (name == "cancel") {
+            poly({QPointF(9, 9), QPointF(15, 15)});
+            poly({QPointF(15, 9), QPointF(9, 15)});
+        } else {
+            poly({QPointF(12, 7.4), QPointF(12, 13)});
+            poly({QPointF(12, 16.2), QPointF(12, 16.4)});
+        }
     }
     p.end();
     return pm;

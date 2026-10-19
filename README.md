@@ -85,6 +85,13 @@ Instaladores y paquetes listos para usar en la página de **[Releases](https://g
   (en Linux, además `Qt WebChannel`, `Qt Positioning` y `Qt SerialPort`)
   - Recomendado **Qt 6.11 o superior**: cuanto más nuevo el Qt, más nuevo el motor Chromium y más rápido es el navegador en webs pesadas. Kinetix se compila y distribuye con **Qt 6.11.2 (Chromium 140)**.
 
+> **Nota sobre los códecs de vídeo:** las compilaciones oficiales de Qt WebEngine
+> van con Chromium compilado **sin los códecs propietarios**, así que **H.264
+> (MP4) y AAC no están disponibles**. Los vídeos que sirven X/Twitter, Instagram o
+> la mayoría de webs en MP4/HLS **no se reproducen**; los de WebM (VP8, VP9) y
+> AV1 sí. No hay ningún flag que lo arregle: hay que recompilar Qt WebEngine con
+> FFmpeg de marca "Chrome" (`proprietary_codecs = true`).
+
 ### Windows (MSVC)
 
 ```powershell

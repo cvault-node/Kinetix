@@ -31,7 +31,8 @@ CodeEditor::CodeEditor(QWidget *parent)
 
     m_mainLayout->addLayout(m_toolbarLayout);
     m_mainLayout->addWidget(m_editor);
-    setLayout(m_mainLayout);
+    // m_mainLayout ya se instaló en este widget al construirse con el padre:
+    // volver a llamar a setLayout() solo produce un aviso de Qt.
 
     connect(m_btnOpen, &QPushButton::clicked, this, &CodeEditor::openFile);
     connect(m_btnSave, &QPushButton::clicked, this, &CodeEditor::saveFile);

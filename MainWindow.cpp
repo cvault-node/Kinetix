@@ -285,7 +285,9 @@ private:
     void recompute()
     {
         m_tabs.clear();
-        const int avail = width() - 6;
+        // Se reserva el hueco del boton "+": si no, con muchas pestañas
+        // queda fuera de la barra y no se puede abrir una pestaña con el ratón.
+        const int avail = width() - 6 - kPlusWidth - 8;
         int w = 220;
         if (count() > 0) {
             if (count() * w > avail) {
@@ -299,7 +301,11 @@ private:
             m_tabs.append(QRect(x, 0, w, height()));
             x += w;
         }
-        const int px = m_tabs.isEmpty() ? 4 : m_tabs.last().right() + 8;
+        int px = m_tabs.isEmpty() ? 4 : m_tabs.last().right() + 8;
+        if (px + kPlusWidth > width())
+            px = width() - kPlusWidth;
+        if (px < 0)
+            px = 0;
         m_plusRect = QRect(px, 0, kPlusWidth, height());
     }
 
@@ -626,11 +632,13 @@ public:
         if (!m_page)
             return false;
         const QUrl u = m_page->url();
-        if (u.scheme() != QStringLiteral("kinetix"))
+        if (u.scheme() != QLatin1String("kinetix"))
             return false;
         // Únicamente la portada interna (kinetix://inicio) puede usar el puente.
-        return u.adjusted(QUrl::NormalizePathSegments).toString()
-               == QStringLiteral("kinetix://inicio");
+        // Se compara por host y no por cadena exacta: el motor puede dejar la
+        // URL normalizada como "kinetix://inicio/" y el puente se quedaria
+        // inutilizable en la propia portada.
+        return u.host() == QLatin1String("inicio");
     }
 
     // Solo se aceptan URLs http/https para abrir desde el puente.
@@ -791,6 +799,14 @@ private:
 namespace {
 constexpr int kHistoryLimit = 300;
 
+// True si la URL es la portada interna del navegador. Se compara por esquema
+// y host, no por cadena exacta: el motor puede normalizarla a
+// "kinetix://inicio/" y entonces la comparacion literal fallaba.
+bool isInternalHomeUrl(const QUrl &u)
+{
+    return u.scheme() == QLatin1String("kinetix") && u.host() == QLatin1String("inicio");
+}
+
 // Token "Windows NT x.y" correspondiente al sistema real. La plantilla de UA
 // que trae Qt declara 6.2 (Windows 8) incluso en Windows 10/11.
 QString windowsNtToken()
@@ -944,7 +960,7 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent, bool private
     , m_zoomAnim(nullptr)
     , m_zoomBadgeTimer(new QTimer(this))
     , m_settings(new QSettings(QStringLiteral("%1/.navegador_personal/config.ini").arg(QDir::homePath()), QSettings::IniFormat, this))
-    , m_profile(profile)
+    , m_profile(profile ? profile : QWebEngineProfile::defaultProfile())
     , m_darkMode(m_settings->value(QStringLiteral("apariencia/modo_oscuro"), true).toBool())
     , m_showBookmarkBar(m_settings->value(QStringLiteral("apariencia/barra_marcadores"), true).toBool())
     , m_showTabsSidebar(m_settings->value(QStringLiteral("apariencia/pestanas_laterales"), true).toBool())
@@ -1004,10 +1020,10 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent, bool private
     connect(prof, &QWebEngineProfile::downloadRequested, this,
             &MainWindow::handleDownloadRequested);
 
-    if (prof != QWebEngineProfile::defaultProfile()) {
-        connect(QWebEngineProfile::defaultProfile(), &QWebEngineProfile::downloadRequested, this,
-                &MainWindow::handleDownloadRequested);
-    }
+    // No se conecta el perfil por defecto: cada ventana gestiona solo las
+    // descargas de su propio perfil. Conectar tambien el perfil por defecto
+    // hacia que la ventana privada se llevara las descargas de la normal
+    // (duplicadas y metidas en su historial).
 
     connect(m_spinTimer, &QTimer::timeout, this, &MainWindow::tickSpinners);
 
@@ -1114,10 +1130,22 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent, bool private
   if (window.__kinetixVideoLight) return;
   window.__kinetixVideoLight = true;
   var userActed = false;
+  // Un vídeo que el motor no puede decodificar (por ejemplo H.264, que este
+  // motor no trae) no tiene sentido reanudarlo: cada intento de play() vuelve
+  // a pedir el stream y a fallar, con el trafico y el repintado que Eso
+  // provoca en las paginas con muchos vídeos.
+  function reproducible(v) {
+    try {
+      if (v.error) return false;
+      if (v.readyState < 1) return false;
+    } catch (e) { return false; }
+    return true;
+  }
   function resumeAll() {
     var vs = document.querySelectorAll('video[data-kp="1"]');
     for (var i = 0; i < vs.length; i++) {
       vs[i].removeAttribute('data-kp');
+      if (!reproducible(vs[i])) continue;
       try { vs[i].play().catch(function () {}); } catch (e) {}
     }
   }
@@ -1142,11 +1170,13 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent, bool private
             if (v._kpT) { clearTimeout(v._kpT); v._kpT = 0; }
             if (v.getAttribute('data-kp') === '1') {
               v.removeAttribute('data-kp');
+              if (!reproducible(v)) return;
               try { v.play().catch(function () {}); } catch (err) {}
             }
             return;
           }
           if (!v.muted || v.paused || v.ended || v._kpT) return;
+          if (!reproducible(v)) return;
           v._kpT = setTimeout(function () {
             v._kpT = 0;
             if (userActed || v.paused || !v.muted || v.ended) return;
@@ -1206,7 +1236,36 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent, bool private
     loadDownloadHistory();
     loadTileNames();
 
-    newTab();
+    // Qué pestaña abrir al iniciar. "Restaurar sesión anterior" recupera las
+    // pestañas http guardadas al cerrar; las ventanas privadas siempre abren
+    // la página de inicio.
+    const int startupMode = m_settings->value(QStringLiteral("general/inicio"), 0).toInt();
+    if (m_privateMode) {
+        // Una ventana privada siempre abre la página de inicio.
+        newTab();
+    } else if (startupMode == 2) {
+        const QStringList savedUrls = m_settings->value(QStringLiteral("sesion/urls")).toStringList();
+        for (const QString &u : savedUrls) {
+            const QUrl url(u);
+            if (url.isValid() && (url.scheme() == QLatin1String("http")
+                                  || url.scheme() == QLatin1String("https")))
+                newTab(u);
+        }
+        if (m_tabs->count() == 0) {
+            newTab();
+        } else {
+            // "sesion/indice" es el indice DENTRO de la lista de URLs
+            // guardadas, no el indice de la pestana activa: al restaurar solo
+            // se reabren las pestanas http, asi que los indices no coinciden.
+            const int idx = m_settings->value(QStringLiteral("sesion/indice"), -1).toInt();
+            m_tabs->setCurrentIndex(idx >= 0 && idx < m_tabs->count() ? idx : 0);
+        }
+    } else if (startupMode == 1) {
+        // "Pestaña en blanco": se abre una pestaña vacia, no la página de inicio.
+        newTab(QStringLiteral("about:blank"));
+    } else {
+        newTab();
+    }
 
     QTimer::singleShot(0, this, [this]() {
         updateBookmarksList();
@@ -1238,7 +1297,11 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent, bool private
                     img.loadFromData(ba);
                     if (!img.isNull()) {
                         QImage out = img.scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-                        const QString path = QDir::homePath() + QStringLiteral("/.navegador_personal/iconos/") + hashUrlForIcon(pageUrl);
+                        const QString dir = QDir::homePath() + QStringLiteral("/.navegador_personal/iconos");
+                        // Sin crear la carpeta, el guardado falla en silencio y
+                        // el icono de alta resolucion no se guarda nunca.
+                        QDir().mkpath(dir);
+                        const QString path = dir + QStringLiteral("/") + hashUrlForIcon(pageUrl);
                         out.save(path, "PNG");
                         refreshHomeTabs();
                     }
@@ -1300,12 +1363,32 @@ void MainWindow::closeEvent(QCloseEvent *event)
     // Una ventana privada no deja rastro: no guarda geometría ni ajustes
     // globales, para no pisar los de la ventana normal.
     if (!m_privateMode) {
-        m_settings->setValue(QStringLiteral("ventana/geometry"), saveGeometry());
-        m_settings->setValue(QStringLiteral("ventana/splitter"), m_splitter->saveState());
-        m_settings->setValue(QStringLiteral("apariencia/modo_oscuro"), m_darkMode);
-        m_settings->setValue(QStringLiteral("apariencia/barra_marcadores"), m_showBookmarkBar);
-        m_settings->setValue(QStringLiteral("apariencia/pestanas_laterales"), m_showTabsSidebar);
-        m_settings->setValue(QStringLiteral("busqueda/motor"), m_searchEngine);
+        setSetting(QStringLiteral("ventana/geometry"), saveGeometry());
+        setSetting(QStringLiteral("ventana/splitter"), m_splitter->saveState());
+        setSetting(QStringLiteral("apariencia/modo_oscuro"), m_darkMode);
+        setSetting(QStringLiteral("apariencia/barra_marcadores"), m_showBookmarkBar);
+        setSetting(QStringLiteral("apariencia/pestanas_laterales"), m_showTabsSidebar);
+        setSetting(QStringLiteral("busqueda/motor"), m_searchEngine);
+        // Guarda la sesión (pestañas http abiertas) para poder restaurarla.
+        QStringList openUrls;
+        int sessionIndex = -1;
+        for (int i = 0; i < m_tabs->count(); ++i) {
+            auto *bt = qobject_cast<BrowserTab *>(m_tabs->widget(i));
+            if (!bt)
+                continue;
+            const QString u = bt->webView()->url().toString();
+            if (!u.startsWith(QStringLiteral("http")))
+                continue;
+            // El indice se guarda DENTRO de la lista de URLs: al restaurar solo
+            // se reabren las pestañas http, de modo que el indice de la
+            // pestaña activa en la lista completa no coincide con el indice
+            // en la lista guardada (la página de inicio ocupa la posicion 0).
+            if (i == m_tabs->currentIndex())
+                sessionIndex = openUrls.size();
+            openUrls << u;
+        }
+        setSetting(QStringLiteral("sesion/urls"), openUrls);
+        setSetting(QStringLiteral("sesion/indice"), sessionIndex);
         saveHistory();
         saveDownloadHistory();
         m_settings->sync();
@@ -1486,7 +1569,7 @@ void MainWindow::createShortcuts()
     addSc(QKeySequence(Qt::CTRL | Qt::Key_Plus), [this]() { zoomIn(); });
     addSc(QKeySequence(Qt::CTRL | Qt::Key_Equal), [this]() { zoomIn(); });
     addSc(QKeySequence(Qt::CTRL | Qt::Key_Minus), [this]() { zoomOut(); });
-    addSc(QKeySequence(Qt::Key_0), [this]() { zoomReset(); });
+    addSc(QKeySequence(Qt::CTRL | Qt::Key_0), [this]() { zoomReset(); });
 }
 
 void MainWindow::createLayout()
@@ -1714,9 +1797,22 @@ void MainWindow::reopenClosedTab()
 void MainWindow::fetchHighResFavicon(const QString &pageUrl)
 {
     if (pageUrl.isEmpty() || !pageUrl.startsWith(QStringLiteral("http"))) return;
+    // Desactivado por defecto: este servicio de Google recibe el dominio de
+    // cada sitio visitado, lo que contradice la promesa de no hacer peticiones
+    // ocultas. Solo se usa si el usuario lo activa en Privacidad. El icono
+    // normal lo proporciona la propia web (QWebEngineView::iconChanged).
+    if (!m_settings->value("privacidad/favicon_google", false).toBool()) return;
+    if (!m_faviconNet)
+        return;
     if (m_faviconFetched.contains(pageUrl)) return;
     m_faviconFetched.insert(pageUrl);
-    QNetworkRequest req(QUrl(QStringLiteral("https://www.google.com/s2/favicons?domain_url=%1&sz=64").arg(pageUrl)));
+    // La URL de la pagina se mete como parametro de consulta: si se pega tal
+    // cual, sus propios "?", "&" o "#" rompen la consulta y el icono nunca
+    // llega (ademas se filtrarian partes de la URL visitada).
+    QUrl faviconUrl(QStringLiteral("https://www.google.com/s2/favicons"));
+    faviconUrl.setQuery(QUrlQuery({{QStringLiteral("domain_url"), pageUrl},
+                                   {QStringLiteral("sz"), QStringLiteral("64")}}));
+    QNetworkRequest req(faviconUrl);
     req.setAttribute(QNetworkRequest::User, pageUrl);
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Mozilla/5.0"));
     m_faviconNet->get(req);
@@ -1726,7 +1822,7 @@ void MainWindow::refreshHomeTabs()
 {
     for (int i = 0; i < m_tabs->count(); ++i) {
         if (auto *t = qobject_cast<BrowserTab *>(m_tabs->widget(i))) {
-            if (t->webView()->url().toString() == QStringLiteral("kinetix://inicio"))
+            if (isInternalHomeUrl(t->webView()->url()))
                 t->webView()->setHtml(buildHomePage(), QUrl(QStringLiteral("kinetix://inicio")));
         }
     }
@@ -1830,7 +1926,12 @@ void MainWindow::onLinkHovered(const QString &url)
         return;
     }
     const QFontMetrics fm(m_linkBubble->font());
-    m_linkBubble->setText(fm.elidedText(url, Qt::ElideMiddle, 560));
+    const QString shown = fm.elidedText(url, Qt::ElideMiddle, 560);
+    // Si ya se está mostrando el mismo enlace, no se redibuja ni se reposiciona
+    // (evita repintados constantes al mover el ratón sobre el mismo enlace).
+    if (m_linkBubble->isVisible() && m_linkBubble->text() == shown)
+        return;
+    m_linkBubble->setText(shown);
     m_linkBubble->adjustSize();
     positionLinkBubble();
     m_linkBubble->show();
@@ -1875,6 +1976,16 @@ void MainWindow::fillHistoryList(QListWidget *list, const QString &filter)
         empty->setTextAlignment(Qt::AlignCenter);
         empty->setForeground(m_pal.color(m_pal.textMuted));
     }
+}
+
+void MainWindow::setSetting(const QString &key, const QVariant &value)
+{
+    // Una ventana privada no deja rastro: el config.ini es el mismo que usa
+    // la ventana normal, asi que escribir en el desde la ventana privada
+    // pisaria los ajustes globales del navegador.
+    if (m_privateMode)
+        return;
+    m_settings->setValue(key, value);
 }
 
 void MainWindow::applyTheme()
@@ -2057,7 +2168,13 @@ BrowserTab *MainWindow::newTab(const QString &url)
     connect(tab, &BrowserTab::pdfFinished, this, &MainWindow::onPdfFinished);
     connect(tab, &BrowserTab::zoomChanged, this, [this](BrowserTab *) { updateZoomStatus(true); });
     connect(tab, &BrowserTab::loadingChanged, this, [this](BrowserTab *) { refreshTabLoading(); });
-    connect(tab->webView(), &QWebEngineView::urlChanged, this, [this]() { updateUrlBarFromCurrent(); });
+    connect(tab->webView(), &QWebEngineView::urlChanged, this, [this, tab]() {
+        // Solo la pestaña activa actualiza la barra de direcciones: si no, una
+        // pestaña en segundo plano que navega borra lo que el usuario está
+        // escribiendo en ese momento.
+        if (m_tabs->currentWidget() == tab)
+            updateUrlBarFromCurrent();
+    });
     connect(tab->webView(), &QWebEngineView::loadFinished, this, &MainWindow::registerHistoryOnLoadFinished);
     connect(tab->webView(), &QWebEngineView::loadFinished, this, [this](bool) { updateZoomStatus(); });
 
@@ -2066,12 +2183,17 @@ BrowserTab *MainWindow::newTab(const QString &url)
     auto *page = tab->webView()->page();
 
     connect(page, &QWebEnginePage::findTextFinished, this,
-            [this](const QWebEngineFindTextResult &result) {
-                if (m_findBar && m_findBar->isVisible() && m_findCount) {
-                    m_findCount->setText(QStringLiteral("%1/%2")
-                                             .arg(result.activeMatch())
-                                             .arg(result.numberOfMatches()));
-                }
+            [this, page](const QWebEngineFindTextResult &result) {
+                if (!m_findBar || !m_findBar->isVisible() || !m_findCount)
+                    return;
+                // Solo cuenta la página que se está viendo: un resultado tardio
+                // de otra pestaña machaca el contador de la actual.
+                BrowserTab *cur = qobject_cast<BrowserTab *>(m_tabs->currentWidget());
+                if (!cur || cur->webView()->page() != page)
+                    return;
+                m_findCount->setText(QStringLiteral("%1/%2")
+                                         .arg(result.activeMatch())
+                                         .arg(result.numberOfMatches()));
             });
     connect(page, &QWebEnginePage::newWindowRequested, this,
             [this](QWebEngineNewWindowRequest &request) {
@@ -2207,17 +2329,25 @@ BrowserTab *MainWindow::newTab(const QString &url)
     setHomeBridge(channel, bridge, url.isEmpty());
 
     // Al navegar, el puente solo sigue vivo si el destino sigue siendo interno.
+    // Se escucha tanto urlChanged (inmediato, cierra la ventana entre el inicio
+    // de la navegación y su final) como loadStarted/loadFinished.
+    connect(page, &QWebEnginePage::urlChanged, page, [this, page](const QUrl &newUrl) {
+        QWebChannel *ch = page->findChild<QWebChannel *>();
+        HomeBridge *br = page->findChild<HomeBridge *>();
+        if (ch && br)
+            setHomeBridge(ch, br, isInternalHomeUrl(newUrl));
+    });
     connect(page, &QWebEnginePage::loadStarted, page, [this, page]() {
         QWebChannel *ch = page->findChild<QWebChannel *>();
         HomeBridge *br = page->findChild<HomeBridge *>();
         if (ch && br)
-            setHomeBridge(ch, br, page->url() == QUrl(QStringLiteral("kinetix://inicio")));
+            setHomeBridge(ch, br, isInternalHomeUrl(page->url()));
     });
     connect(page, &QWebEnginePage::loadFinished, page, [this, page](bool) {
         QWebChannel *ch = page->findChild<QWebChannel *>();
         HomeBridge *br = page->findChild<HomeBridge *>();
         if (ch && br)
-            setHomeBridge(ch, br, page->url() == QUrl(QStringLiteral("kinetix://inicio")));
+            setHomeBridge(ch, br, isInternalHomeUrl(page->url()));
     });
 
     page->setWebChannel(channel);
@@ -2230,7 +2360,7 @@ BrowserTab *MainWindow::newTab(const QString &url)
     else
         tab->webView()->setUrl(QUrl(url));
 
-    updateUrlBarFromCurrent();
+    updateUrlBarFromCurrent(true);
     updateNavigationState();
     updateTabsSidebar();
     refreshTabLoading();
@@ -2369,7 +2499,9 @@ void MainWindow::currentTabChanged(int index)
 {
     Q_UNUSED(index);
     updateTabLifecycle();
-    updateUrlBarFromCurrent();
+    // Al cambiar de pestaña la barra muestra siempre la URL de la nueva
+    // pestaña, aunque el usuario estuviera escribiendo en ella.
+    updateUrlBarFromCurrent(true);
     updateNavigationState();
     updateSidebarActiveState();
     updateZoomStatus();
@@ -2426,7 +2558,11 @@ void MainWindow::loadUrl()
     if (text.isEmpty())
         return;
 
-    const QString destination = getDestinationUrl(text);
+    const QString destination = getDestinationUrl(text, m_searchEngine);
+    // El campo pasa a contener la URL de destino: a partir de aqui el
+    // navegador puede actualizarla (redirecciones) sin pisar al usuario.
+    m_urlInput->setText(destination);
+    m_lastUrlShown = destination;
     BrowserTab *tab = qobject_cast<BrowserTab *>(m_tabs->currentWidget());
     if (tab)
         tab->webView()->setUrl(QUrl(destination));
@@ -2471,7 +2607,7 @@ void MainWindow::savePdf()
 void MainWindow::toggleDarkMode(bool enabled)
 {
     m_darkMode = enabled;
-    m_settings->setValue(QStringLiteral("apariencia/modo_oscuro"), enabled);
+    setSetting(QStringLiteral("apariencia/modo_oscuro"), enabled);
     applyTheme();
 }
 
@@ -2480,7 +2616,7 @@ void MainWindow::toggleBookmarkBar()
     m_showBookmarkBar = !m_showBookmarkBar;
     if (m_bookmarkBar)
         m_bookmarkBar->setVisible(m_showBookmarkBar);
-    m_settings->setValue(QStringLiteral("apariencia/barra_marcadores"), m_showBookmarkBar);
+    setSetting(QStringLiteral("apariencia/barra_marcadores"), m_showBookmarkBar);
 }
 
 void MainWindow::toggleFullscreen()
@@ -2548,11 +2684,30 @@ void MainWindow::addBookmarkFromCurrent()
     const QString url = tab->webView()->url().toString();
     const QString title = tab->webView()->title();
 
+    // Solo se ancla lo que se puede abrir: la portada interna o una página en
+    // blanco creaban un anclado muerto (no aparece en la barra y no hace
+    // nada al pulsarlo).
+    if (!url.startsWith(QStringLiteral("http://")) && !url.startsWith(QStringLiteral("https://"))) {
+        QMessageBox::information(this, tr("Nuevo anclado"),
+            tr("Solo se pueden anclar páginas web, no la portada del navegador."));
+        return;
+    }
+
     bool ok = false;
     const QString name = QInputDialog::getText(this, tr("Nuevo anclado"), tr("Nombre del sitio:"),
                                                QLineEdit::Normal, title, &ok);
     if (!ok || name.isEmpty())
         return;
+
+    // Reemplazar un anclado existente sin avisar hacia que su URL se perdia
+    // sin que el usuario se enterase.
+    if (m_bookmarks.contains(name)) {
+        const auto answer = QMessageBox::question(this, tr("Nuevo anclado"),
+            tr("Ya existe un anclado llamado '%1'. ¿Quieres reemplazarlo?").arg(name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+    }
 
     QVariantMap entry;
     entry.insert(QStringLiteral("url"), url);
@@ -2820,7 +2975,7 @@ void MainWindow::toggleTabsSidebar()
         m_tabsSidebarPanel->setVisible(m_showTabsSidebar);
     if (m_tabs)
         m_tabs->tabBar()->setVisible(!m_showTabsSidebar);
-    m_settings->setValue(QStringLiteral("apariencia/pestanas_laterales"), m_showTabsSidebar);
+    setSetting(QStringLiteral("apariencia/pestanas_laterales"), m_showTabsSidebar);
     updateTabsSidebar();
 }
 
@@ -3093,15 +3248,33 @@ void MainWindow::updateSidebarSpinners()
 
 void MainWindow::handleDownloadRequested(QWebEngineDownloadRequest *download)
 {
-    if (!download || download->downloadFileName().isEmpty())
+    if (!download)
         return;
+    // Qt exige que toda peticion de descarga se resuelva con accept() o
+    // cancel(): si se devuelve sin hacer nada, la descarga se queda pendiente
+    // para siempre (ni empieza, ni falla, ni se libera).
+    if (download->downloadFileName().isEmpty()) {
+        download->cancel();
+        return;
+    }
 
     // Sanitiza el nombre que propone el servidor: sin separadores de ruta, sin
     // "..", sin caracteres de control y sin nombres reservados de Windows.
     QString safeName = sanitizeDownloadFileName(download->downloadFileName());
-    if (safeName.isEmpty())
+    if (safeName.isEmpty()) {
+        download->cancel();
         return;
+    }
     download->setDownloadFileName(safeName);
+
+    // Si el motor no ha fijado todavia el directorio de destino, se usa la
+    // carpeta de descargas del sistema: de lo contrario la ruta guardada queda
+    // vacia y el boton "Abrir" nunca encuentra el archivo.
+    if (download->downloadDirectory().isEmpty()) {
+        const QString dlDir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (!dlDir.isEmpty())
+            download->setDownloadDirectory(dlDir);
+    }
 
     download->accept();
     m_downloads.append(download);
@@ -3131,12 +3304,16 @@ void MainWindow::handleDownloadRequested(QWebEngineDownloadRequest *download)
                 const bool finishedState = state == QWebEngineDownloadRequest::DownloadCompleted
                                         || state == QWebEngineDownloadRequest::DownloadCancelled
                                         || state == QWebEngineDownloadRequest::DownloadInterrupted;
+                // La entrada del historial se actualiza en CADA cambio de
+                // estado: si solo se actualiza al final, una descarga en curso
+                // se queda con el estado inicial (DownloadRequested) y el panel
+                // la muestra como "Fallida" en vez de "En progreso".
+                updateDownloadHistoryEntry(download);
                 if (finishedState) {
-                    updateDownloadHistoryEntry(download);
                     m_dlFinishedPending = true;
                     m_dlFinishedOk = (state == QWebEngineDownloadRequest::DownloadCompleted);
                     m_dlFinishedName = download->downloadFileName();
-                    m_dlFinishedPath = download->downloadDirectory() + QStringLiteral("/") + m_dlFinishedName;
+                    m_dlFinishedPath = QDir(download->downloadDirectory()).filePath(m_dlFinishedName);
                     m_dlFinishedReceived = double(download->receivedBytes());
                     m_dlFinishedTotal = double(download->totalBytes());
                     if (m_dlFinishedOk)
@@ -3612,11 +3789,25 @@ void MainWindow::addDownloadToHistory(const QWebEngineDownloadRequest *download)
     QVariantMap entry;
     entry.insert(QStringLiteral("nombre"), download->downloadFileName());
     entry.insert(QStringLiteral("url"), download->url().toString());
-    entry.insert(QStringLiteral("ruta"), download->downloadDirectory() + QStringLiteral("/") + download->downloadFileName());
+    entry.insert(QStringLiteral("ruta"), QDir(download->downloadDirectory()).filePath(download->downloadFileName()));
     entry.insert(QStringLiteral("tamano"), double(download->totalBytes()));
     entry.insert(QStringLiteral("recibido"), double(download->receivedBytes()));
-    entry.insert(QStringLiteral("estado"), int(download->state()));
+    // La descarga se acaba de aceptar: todavia no ha empezado a transferirse,
+    // pero no esta "fallida". Se guarda como "en curso" para que el panel no
+    // la muestre como error mientras Chromium decide el nombre definitivo.
+    const int st = int(download->state());
+    entry.insert(QStringLiteral("estado"),
+                 st == int(QWebEngineDownloadRequest::DownloadRequested)
+                     ? int(QWebEngineDownloadRequest::DownloadInProgress)
+                     : st);
     entry.insert(QStringLiteral("fecha"), QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss")));
+    // Evita entradas duplicadas: si esa descarga (misma ruta) ya estaba, se
+    // reemplaza en lugar de añadir otra copia.
+    const QString ruta = entry.value(QStringLiteral("ruta")).toString();
+    for (int i = m_downloadHistory.size() - 1; i >= 0; --i) {
+        if (m_downloadHistory[i].value(QStringLiteral("ruta")).toString() == ruta)
+            m_downloadHistory.removeAt(i);
+    }
     m_downloadHistory.prepend(entry);
     while (m_downloadHistory.size() > 100)
         m_downloadHistory.removeLast();
@@ -3628,15 +3819,22 @@ void MainWindow::updateDownloadHistoryEntry(const QWebEngineDownloadRequest *dow
 {
     if (!download)
         return;
-    const QString ruta = download->downloadDirectory() + QStringLiteral("/") + download->downloadFileName();
+    const QString ruta = QDir(download->downloadDirectory()).filePath(download->downloadFileName());
     for (int i = 0; i < m_downloadHistory.size(); ++i) {
         QVariantMap &entry = m_downloadHistory[i];
         if (entry.value(QStringLiteral("ruta")).toString() != ruta)
             continue;
-        entry.insert(QStringLiteral("estado"), int(download->state()));
+        const int st = int(download->state());
+        entry.insert(QStringLiteral("estado"), st);
         entry.insert(QStringLiteral("tamano"), double(download->totalBytes()));
         entry.insert(QStringLiteral("recibido"), double(download->receivedBytes()));
-        entry.insert(QStringLiteral("fecha_fin"), QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss")));
+        // "fecha_fin" solo tiene sentido cuando la descarga ha terminado.
+        if (st == int(QWebEngineDownloadRequest::DownloadCompleted)
+            || st == int(QWebEngineDownloadRequest::DownloadCancelled)
+            || st == int(QWebEngineDownloadRequest::DownloadInterrupted)) {
+            entry.insert(QStringLiteral("fecha_fin"),
+                         QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss")));
+        }
         saveDownloadHistory();
         rebuildDownloadPanelList();
         return;
@@ -3646,6 +3844,11 @@ void MainWindow::updateDownloadHistoryEntry(const QWebEngineDownloadRequest *dow
 
 void MainWindow::loadDownloadHistory()
 {
+    // Igual que el historial: una ventana privada no muestra las descargas
+    // hechas en las ventanas normales.
+    if (m_privateMode)
+        return;
+
     const QString path = QDir::homePath() + QStringLiteral("/.navegador_personal/descargas.json");
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -3663,10 +3866,17 @@ void MainWindow::loadDownloadHistory()
     }
     while (m_downloadHistory.size() > 100)
         m_downloadHistory.removeLast();
+    // El panel se creo antes de leer el archivo: hay que repintarlo o sigue
+    // mostrando "No hay descargas" pese a que hay descargas guardadas.
+    rebuildDownloadPanelList();
 }
 
 void MainWindow::saveDownloadHistory()
 {
+    // Las descargas de una ventana privada no se escriben en disco.
+    if (m_privateMode)
+        return;
+
     const QString dir = QDir::homePath() + QStringLiteral("/.navegador_personal");
     QDir().mkpath(dir);
     QJsonArray arr;
@@ -3704,7 +3914,9 @@ void MainWindow::retryDownload(const QVariantMap &entry)
     const QString url = entry.value(QStringLiteral("url")).toString();
     if (url.isEmpty())
         return;
-    openUrlInCurrentTab(url);
+    // Se reintenta en una pestaña nueva: al navegar en la actual se perdería
+    // la página que el usuario tenía abierta.
+    newTab(url);
 }
 
 void MainWindow::removeDownloadFromHistory(int index)
@@ -3810,7 +4022,31 @@ void MainWindow::rebuildDownloadPanelList()
         texts->addWidget(metaL);
         rh->addLayout(texts, 1);
 
-        if (available) {
+        if (inProgress) {
+            auto *cancelBtn = new QToolButton(row);
+            cancelBtn->setObjectName(QStringLiteral("dlRowBtn"));
+            cancelBtn->setText(tr("Cancelar"));
+            cancelBtn->setAutoRaise(true);
+            cancelBtn->setFocusPolicy(Qt::NoFocus);
+            cancelBtn->setCursor(Qt::PointingHandCursor);
+            cancelBtn->setToolTip(tr("Cancelar esta descarga"));
+            connect(cancelBtn, &QToolButton::clicked, this, [this, ruta]() {
+                for (QWebEngineDownloadRequest *d : m_downloads) {
+                    if (!d)
+                        continue;
+                    const int st = int(d->state());
+                    if (st != int(QWebEngineDownloadRequest::DownloadInProgress)
+                        && st != int(QWebEngineDownloadRequest::DownloadRequested))
+                        continue;
+                    const QString dr = QDir(d->downloadDirectory()).filePath(d->downloadFileName());
+                    if (dr == ruta) {
+                        d->cancel();
+                        break;
+                    }
+                }
+            });
+            rh->addWidget(cancelBtn);
+        } else if (available) {
             auto *openBtn = new QToolButton(row);
             openBtn->setObjectName(QStringLiteral("dlRowBtn"));
             openBtn->setText(tr("Abrir"));
@@ -3820,7 +4056,7 @@ void MainWindow::rebuildDownloadPanelList()
             openBtn->setToolTip(tr("Abrir archivo"));
             connect(openBtn, &QToolButton::clicked, this, [this, ruta]() { openDownloadFile(ruta); });
             rh->addWidget(openBtn);
-        } else if (!inProgress && !entry.value(QStringLiteral("url")).toString().isEmpty()) {
+        } else if (!entry.value(QStringLiteral("url")).toString().isEmpty()) {
             auto *retryBtn = new QToolButton(row);
             retryBtn->setObjectName(QStringLiteral("dlRowBtn"));
             retryBtn->setText(tr("Reintentar"));
@@ -3888,6 +4124,10 @@ void MainWindow::showDownloadPanel()
     m_dlPanelPinned = true;
     m_dlDismissed = false;
     rebuildDownloadPanelList();
+    // Al ocultar la barra se para el temporizador de actualizacion: si no se
+    // reinicia aqui, la barra vuelve con el progreso congelado.
+    if (m_dlUpdateTimer && !m_dlUpdateTimer->isActive() && hasActiveDownloads())
+        m_dlUpdateTimer->start();
     updateDownloadBar();
 }
 
@@ -4085,7 +4325,7 @@ void MainWindow::showDownloadsDialog()
             if (!d || d->state() != QWebEngineDownloadRequest::DownloadInProgress)
                 continue;
             for (int i = 0; i < m_downloadHistory.size(); ++i) {
-                const QString ruta = d->downloadDirectory() + QStringLiteral("/") + d->downloadFileName();
+                const QString ruta = QDir(d->downloadDirectory()).filePath(d->downloadFileName());
                 if (m_downloadHistory[i].value(QStringLiteral("ruta")).toString() == ruta) {
                     m_downloadHistory[i].insert(QStringLiteral("recibido"), double(d->receivedBytes()));
                     m_downloadHistory[i].insert(QStringLiteral("tamano"), double(d->totalBytes()));
@@ -4110,7 +4350,8 @@ void MainWindow::showDownloadsDialog()
     buttons->addWidget(btnClear);
     buttons->addWidget(btnClose);
     layout->addLayout(buttons);
-    dialog.setLayout(layout);
+    // El layout ya se instala en el dialogo al construirse con el padre:
+    // volver a llamar a setLayout() solo produce un aviso de Qt.
     dialog.exec();
 
     m_dlDismissed = false;
@@ -4244,6 +4485,8 @@ void MainWindow::showHistoryDialog()
                 m_history.removeAt(i);
         }
         saveHistory();
+        // "Más visitados" se construye con el historial: hay que refrescarlo.
+        refreshHomeIfActive();
         fillHistoryList(list, search->text());
         updateButtons();
     });
@@ -4254,6 +4497,7 @@ void MainWindow::showHistoryDialog()
             return;
         m_history.clear();
         saveHistory();
+        refreshHomeIfActive();
         search->clear();
         fillHistoryList(list, QString());
         updateButtons();
@@ -4274,7 +4518,8 @@ void MainWindow::showHistoryDialog()
     buttons->addWidget(btnClear);
     buttons->addWidget(btnClose);
     layout->addLayout(buttons);
-    dialog.setLayout(layout);
+    // El layout ya se instala en el dialogo al construirse con el padre:
+    // volver a llamar a setLayout() solo produce un aviso de Qt.
     dialog.exec();
 }
 
@@ -4310,8 +4555,11 @@ void MainWindow::showSettingsDialog()
     auto *startupLabel = new QLabel(tr("Al iniciar:"), general);
     auto *startup = new QComboBox(general);
     startup->addItems({tr("Página de inicio"), tr("Pestaña en blanco"), tr("Restaurar sesión anterior")});
-    const int sidx = startup->findData(m_settings->value("general/inicio", 0).toInt());
-    startup->setCurrentIndex(sidx >= 0 ? sidx : 0);
+    // El valor guardado es el indice del desplegable. findData() no sirve
+    // aqui: los elementos se anaden con addItems(), sin datos de usuario, asi
+    // que nunca encontraba nada y el ajuste se reseteaba a "Página de inicio".
+    const int savedStartup = m_settings->value("general/inicio", 0).toInt();
+    startup->setCurrentIndex(qBound(0, savedStartup, startup->count() - 1));
 
     genLayout->addWidget(new QLabel(tr("<b>Apariencia</b>"), general));
     genLayout->addWidget(dark);
@@ -4353,6 +4601,16 @@ void MainWindow::showSettingsDialog()
         "QCheckBox { color: #c0392b; font-weight: bold; }"
         "QCheckBox:hover { color: #e74c3c; }"));
 
+    auto *faviconGoogle = new QCheckBox(
+        tr("Obtener iconos de alta resolución desde Google"), privacy);
+    faviconGoogle->setChecked(m_settings->value("privacidad/favicon_google", false).toBool());
+    faviconGoogle->setToolTip(tr(
+        "Al activarlo, Kinetix envía el dominio de cada sitio que visitas al "
+        "servicio de iconos de Google (google.com/s2/favicons) para conseguir "
+        "un icono más nítido.\n\n"
+        "Desactivado por defecto: supone enviar a Google tu historial de "
+        "navegación. Los iconos normales los da la propia web."));
+
     // Confirmación al activar: si el usuario lo hace, se le avisa del riesgo.
     connect(blockThirdParty, &QCheckBox::toggled, privacy, [privacy](bool checked) {
         if (!checked)
@@ -4381,7 +4639,10 @@ void MainWindow::showSettingsDialog()
         "<b>Nota sobre Safe Browsing</b><br>"
         "Para que el navegador no haga peticiones ocultas a Google en segundo plano, "
         "se ha desactivado la red en segundo plano; por eso las listas de phishing "
-        "no se actualizan solas. Revise siempre la URL antes de introducir datos."),
+        "no se actualizan solas. Revise siempre la URL antes de introducir datos.\n\n"
+        "Kinetix no contacta con Google para nada salvo que actives «Obtener "
+        "iconos de alta resolución desde Google», que está desactivado por "
+        "defecto."),
         privacy);
     privInfo->setWordWrap(true);
     privInfo->setAlignment(Qt::AlignTop);
@@ -4400,6 +4661,7 @@ void MainWindow::showSettingsDialog()
     privLayout->addWidget(new QLabel(tr("<b>Protección</b>"), privacy));
     privLayout->addWidget(doNotTrack);
     privLayout->addWidget(blockThirdParty);
+    privLayout->addWidget(faviconGoogle);
     privLayout->addSpacing(8);
     privLayout->addWidget(privScroll, 1);
 
@@ -4538,31 +4800,32 @@ void MainWindow::showSettingsDialog()
     });
 
     connect(saveBtn, &QPushButton::clicked, dialog, [this, dialog, dark, bookBar, tabsSide, showFullUrl, engine, startup,
-                                                      doNotTrack, blockThirdParty, chkGpu, spGpuMb, spRamMb, spCacheMb,
+                                                      doNotTrack, blockThirdParty, faviconGoogle, chkGpu, spGpuMb, spRamMb, spCacheMb,
                                                        freezeBg, prefetch, videoLight, videoHw, gpuRaster, gpuComp,
                                                       spMaxCon, spTimeout,
                                                       uaCompat, oldGpuOn, oldGpuMb, oldRamMb]() {
         toggleDarkMode(dark->isChecked());
         m_showBookmarkBar = bookBar->isChecked();
         if (m_bookmarkBar) m_bookmarkBar->setVisible(m_showBookmarkBar);
-        m_settings->setValue(QStringLiteral("apariencia/barra_marcadores"), m_showBookmarkBar);
+        setSetting(QStringLiteral("apariencia/barra_marcadores"), m_showBookmarkBar);
         m_showTabsSidebar = tabsSide->isChecked();
         if (m_tabsSidebarPanel) m_tabsSidebarPanel->setVisible(m_showTabsSidebar);
         if (m_tabs) m_tabs->tabBar()->setVisible(!m_showTabsSidebar);
-        m_settings->setValue(QStringLiteral("apariencia/pestanas_laterales"), m_showTabsSidebar);
+        setSetting(QStringLiteral("apariencia/pestanas_laterales"), m_showTabsSidebar);
         updateTabsSidebar();
 
-        m_settings->setValue(QStringLiteral("apariencia/url_completa"), showFullUrl->isChecked());
+        setSetting(QStringLiteral("apariencia/url_completa"), showFullUrl->isChecked());
 
         const QString newEngine = engine->currentText();
         if (newEngine != m_searchEngine) {
             m_searchEngine = newEngine;
-            m_settings->setValue(QStringLiteral("busqueda/motor"), m_searchEngine);
+            setSetting(QStringLiteral("busqueda/motor"), m_searchEngine);
         }
-        m_settings->setValue(QStringLiteral("general/inicio"), startup->currentIndex());
+        setSetting(QStringLiteral("general/inicio"), startup->currentIndex());
 
-        m_settings->setValue(QStringLiteral("privacidad/dnt"), doNotTrack->isChecked());
-        m_settings->setValue(QStringLiteral("privacidad/bloquear_terceros"), blockThirdParty->isChecked());
+        setSetting(QStringLiteral("privacidad/dnt"), doNotTrack->isChecked());
+        setSetting(QStringLiteral("privacidad/bloquear_terceros"), blockThirdParty->isChecked());
+        setSetting(QStringLiteral("privacidad/favicon_google"), faviconGoogle->isChecked());
 
         // Aplicar el filtro de cookies de terceros en tiempo real.
         if (m_profile && m_profile->cookieStore()) {
@@ -4584,46 +4847,46 @@ void MainWindow::showSettingsDialog()
         const int newGpuMb = spGpuMb->value();
         const int newRamMb = spRamMb->value();
         const int newCacheMb = spCacheMb->value();
-        m_settings->setValue(QStringLiteral("recursos/gpu_acelerado"), newGpu);
-        m_settings->setValue(QStringLiteral("recursos/memoria_gpu_mb"), newGpuMb);
-        m_settings->setValue(QStringLiteral("recursos/ram_max_mb"), newRamMb);
-        m_settings->setValue(QStringLiteral("recursos/cache_mb"), newCacheMb);
+        setSetting(QStringLiteral("recursos/gpu_acelerado"), newGpu);
+        setSetting(QStringLiteral("recursos/memoria_gpu_mb"), newGpuMb);
+        setSetting(QStringLiteral("recursos/ram_max_mb"), newRamMb);
+        setSetting(QStringLiteral("recursos/cache_mb"), newCacheMb);
         if (m_profile)
-            m_profile->setHttpCacheMaximumSize(qint64(newCacheMb) * 1024 * 1024);
+            m_profile->setHttpCacheMaximumSize(static_cast<int>(qBound<qint64>(qint64(16), qint64(newCacheMb), qint64(2047)) * 1024 * 1024));
 
-        m_settings->setValue(QStringLiteral("rendimiento/congelar_fondo"), freezeBg->isChecked());
-        m_settings->setValue(QStringLiteral("rendimiento/prefetch"), prefetch->isChecked());
+        setSetting(QStringLiteral("rendimiento/congelar_fondo"), freezeBg->isChecked());
+        setSetting(QStringLiteral("rendimiento/prefetch"), prefetch->isChecked());
 
         // El vídeo ligero forma parte de los scripts del perfil y necesita reiniciar.
         if (videoLight->isChecked() != m_settings->value(QStringLiteral("rendimiento/video_ligero"), false).toBool()) {
-            m_settings->setValue(QStringLiteral("rendimiento/video_ligero"), videoLight->isChecked());
+            setSetting(QStringLiteral("rendimiento/video_ligero"), videoLight->isChecked());
             QMessageBox::information(dialog, tr("Vídeo ligero"),
                 tr("La optimización de vídeo se aplicará al reiniciar el navegador."));
         }
         if (videoHw->isChecked() != m_settings->value(QStringLiteral("rendimiento/video_hw"), false).toBool()) {
-            m_settings->setValue(QStringLiteral("rendimiento/video_hw"), videoHw->isChecked());
+            setSetting(QStringLiteral("rendimiento/video_hw"), videoHw->isChecked());
             QMessageBox::information(dialog, tr("Vídeo por hardware"),
                 tr("La decodificación de vídeo por hardware se aplicará al reiniciar el navegador."));
         }
         if (gpuRaster->isChecked() != m_settings->value(QStringLiteral("rendimiento/gpu_raster"), false).toBool()) {
-            m_settings->setValue(QStringLiteral("rendimiento/gpu_raster"), gpuRaster->isChecked());
+            setSetting(QStringLiteral("rendimiento/gpu_raster"), gpuRaster->isChecked());
             QMessageBox::information(dialog, tr("Rasterizado por GPU"),
                 tr("El rasterizado por GPU se aplicará al reiniciar el navegador."));
         }
         if (gpuComp->isChecked() != m_settings->value(QStringLiteral("rendimiento/composicion_gpu"), false).toBool()) {
-            m_settings->setValue(QStringLiteral("rendimiento/composicion_gpu"), gpuComp->isChecked());
+            setSetting(QStringLiteral("rendimiento/composicion_gpu"), gpuComp->isChecked());
             QMessageBox::information(dialog, tr("Composición por GPU"),
                 tr("El modo de composición se aplicará al reiniciar el navegador. "
                    "Activarlo hace la navegación más rápida, pero en gráficas Intel antiguas puede parpadear."));
         }
 
-        m_settings->setValue(QStringLiteral("avanzado/max_conexiones"), spMaxCon->value());
-        m_settings->setValue(QStringLiteral("avanzado/timeout"), spTimeout->value());
+        setSetting(QStringLiteral("avanzado/max_conexiones"), spMaxCon->value());
+        setSetting(QStringLiteral("avanzado/timeout"), spTimeout->value());
 
         // La identificación del navegador solo cambia al reiniciar el perfil.
         if (m_settings->value(QStringLiteral("avanzado/ua_compat_chrome"), false).toBool()
                 != uaCompat->isChecked()) {
-            m_settings->setValue(QStringLiteral("avanzado/ua_compat_chrome"), uaCompat->isChecked());
+            setSetting(QStringLiteral("avanzado/ua_compat_chrome"), uaCompat->isChecked());
             QMessageBox::information(dialog, tr("Identificación del navegador"),
                 tr("El cambio de identificación del navegador se aplicará al reiniciar."));
         }
@@ -4653,28 +4916,21 @@ void MainWindow::showSettingsDialog()
         gpuRaster->setChecked(gpuCompositing);  // activar GPU raster cuando hay GPU compositing
         gpuComp->setChecked(gpuCompositing);
 
-        m_settings->setValue(QStringLiteral("recursos/gpu_acelerado"), true);
-        m_settings->setValue(QStringLiteral("recursos/memoria_gpu_mb"), 0);
-        m_settings->setValue(QStringLiteral("recursos/ram_max_mb"), 0);
-        m_settings->setValue(QStringLiteral("recursos/cache_mb"), 256);
-        m_settings->setValue(QStringLiteral("rendimiento/congelar_fondo"), true);
-        m_settings->setValue(QStringLiteral("rendimiento/prefetch"), false);
-        m_settings->setValue(QStringLiteral("rendimiento/video_ligero"), true);
-        m_settings->setValue(QStringLiteral("rendimiento/video_hw"), gpuCompositing);
-        m_settings->setValue(QStringLiteral("rendimiento/gpu_raster"), gpuCompositing);
-        m_settings->setValue(QStringLiteral("rendimiento/composicion_gpu"), gpuCompositing);
+        // El botón solo rellena el formulario: los valores se guardan al
+        // pulsar "Guardar". Si se escribieran aqui, "Cancelar" no cancelaria
+        // nada y los avisos de "requiere reiniciar" no se mostrarían.
         if (m_profile)
             m_profile->setHttpCacheMaximumSize(qint64(256) * 1024 * 1024);
-        m_settings->sync();
 
-        QMessageBox::information(dialog, tr("Configuración óptima aplicada"),
-            tr("Se ha aplicado la configuración óptima para este equipo:\n\n"
+        QMessageBox::information(dialog, tr("Configuración óptima"),
+            tr("Se ha rellenado la configuración óptima para este equipo:\n\n"
                "• Renderizado: %1\n"
                "• GPU rasterization: %2 (velocidad + corrección color sRGB)\n"
                "• Vídeo por hardware: %3\n"
                "• Congelar pestañas en segundo plano: sí\n"
                "• Caché: 256 MB\n\n"
-               "Reinicia el navegador para que surta efecto.")
+               "Pulsa «Guardar» para aplicarla. Después reinicia el navegador "
+               "para que surta efecto.")
                 .arg(needsSoftware ? tr("composición en software (sin parpadeo)")
                                    : tr("composición por GPU (más rápido)")
                     , gpuCompositing ? tr("activada") : tr("desactivada")
@@ -5040,7 +5296,7 @@ void MainWindow::updateNavigationState()
     m_btnReload->setEnabled(hasTab);
 }
 
-void MainWindow::updateUrlBarFromCurrent()
+void MainWindow::updateUrlBarFromCurrent(bool force)
 {
     BrowserTab *tab = qobject_cast<BrowserTab *>(m_tabs->currentWidget());
     if (!tab)
@@ -5049,8 +5305,13 @@ void MainWindow::updateUrlBarFromCurrent()
     QString url = tab->webView()->url().toString();
     if (url.startsWith(QStringLiteral("about:")) || url.startsWith(QStringLiteral("kinetix:")) || url.startsWith(QStringLiteral("data:")))
         url.clear();
+    // Si el campo ya no muestra lo que puso el navegador, el usuario lo está
+    // editando: no se le pisa el texto a medio escribir.
+    if (!force && m_urlInput->text() != m_lastUrlShown)
+        return;
     if (m_urlInput->text() != url)
         m_urlInput->setText(url);
+    m_lastUrlShown = url;
 
     updateStatusBarState();
 }
@@ -5063,8 +5324,15 @@ void MainWindow::registerHistoryOnLoadFinished(bool ok)
     if (!ok)
         return;
 
-    BrowserTab *tab = qobject_cast<BrowserTab *>(m_tabs->currentWidget());
-    if (!tab)
+    // La señal la emite la vista que terminó de cargar, que no tiene por qué
+    // ser la pestaña activa: si el usuario cambia de pestaña mientras otra
+    // sigue cargando, el registro debe ir a la que cargó de verdad.
+    auto *view = qobject_cast<QWebEngineView *>(sender());
+    BrowserTab *tab = view ? qobject_cast<BrowserTab *>(view->parent())
+                           : qobject_cast<BrowserTab *>(m_tabs->currentWidget());
+    // La pestaña pudo cerrarse mientras terminaba de cargar: en ese caso la
+    // vista existe un instante más (deleteLater) pero ya no está en la lista.
+    if (!tab || m_tabs->indexOf(tab) < 0)
         return;
 
     const QString url = tab->webView()->url().toString();
@@ -5155,6 +5423,8 @@ void MainWindow::clearHistory()
 
     m_history.clear();
     saveHistory();
+    // Los accesos rapidos de la pagina de inicio salen del historial.
+    refreshHomeIfActive();
 }
 
 void MainWindow::clearAllBrowsingData()
@@ -5172,8 +5442,14 @@ void MainWindow::clearAllBrowsingData()
         return;
 
     // Cierra las pestañas abiertas: libera sesiones y almacenamiento web.
-    while (m_tabs->count() > 1)
-        closeTab(0);
+    // closeTab() no cierra la ultima pestaña, asi que se quitan directamente
+    // para no dejar ninguna abierta con sus cookies y su sesion.
+    while (m_tabs->count() > 0) {
+        QWidget *w = m_tabs->widget(0);
+        m_tabs->removeTab(0);
+        if (w)
+            w->deleteLater();
+    }
     newTab();
 
     // Cookies y caché del perfil de Chromium.
@@ -5224,6 +5500,11 @@ void MainWindow::saveBookmarks()
 
 void MainWindow::loadHistory()
 {
+    // En una ventana privada no se carga el historial de disco: si no, se
+    // filtraría al usuario lo que ha visitado en las ventanas normales.
+    if (m_privateMode)
+        return;
+
     const QString path = QDir::homePath() + QStringLiteral("/.navegador_personal/historial.json");
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -5268,6 +5549,10 @@ void MainWindow::saveHistory()
 void MainWindow::loadTileNames()
 {
     m_tileNames.clear();
+    // Una ventana privada no lee los nombres guardados: son parte del perfil
+    // de la ventana normal y no deben aparecer en la privada.
+    if (m_privateMode)
+        return;
     m_settings->beginGroup(QStringLiteral("tiles"));
     const QStringList keys = m_settings->childKeys();
     for (const QString &key : keys) {
@@ -5281,9 +5566,16 @@ void MainWindow::loadTileNames()
 
 void MainWindow::saveTileNames()
 {
+    // Una ventana privada no deja rastro en disco: los nombres de los accesos
+    // se guardan en el config.ini compartido con la ventana normal.
+    if (m_privateMode)
+        return;
     m_settings->beginGroup(QStringLiteral("tiles"));
+    // Se reescribe el grupo entero: si no, los nombres de accesos ya
+    // borrados se acumulan para siempre en el archivo de configuracion.
+    m_settings->remove(QString());
     for (auto it = m_tileNames.constBegin(); it != m_tileNames.constEnd(); ++it)
-        m_settings->setValue(hashUrlForIcon(it.key()), it.key() + QChar(0x1f) + it.value());
+        setSetting(hashUrlForIcon(it.key()), it.key() + QChar(0x1f) + it.value());
     m_settings->endGroup();
     m_settings->sync();
 }
@@ -5328,6 +5620,10 @@ void MainWindow::deleteTileUrl(const QString &url)
             it.remove();
     }
     saveHistory();
+    // El nombre personalizado del acceso se borra con el acceso: si no, queda
+    // guardado en el config.ini y reaparece al volver a visitar la pagina.
+    if (m_tileNames.remove(url) > 0)
+        saveTileNames();
     refreshHomeIfActive();
 }
 

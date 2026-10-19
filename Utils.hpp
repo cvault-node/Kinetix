@@ -21,7 +21,7 @@ struct ProcSample {
 QList<ProcSample> sampleKinetixProcesses();
 
 bool isValidUrl(const QString &text);
-QString getDestinationUrl(const QString &text);
+QString getDestinationUrl(const QString &text, const QString &engine = QString());
 QString hashUrlForIcon(const QString &url);
 QString saveFaviconIcon(const QString &url, const QIcon &icon);
 QIcon loadIconFromPath(const QString &path);

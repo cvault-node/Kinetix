@@ -47,7 +47,9 @@ BrowserTab::BrowserTab(const QString &url, QWebEngineProfile *profile, QWidget *
     settings->setAttribute(QWebEngineSettings::PdfViewerEnabled, true);
     settings->setAttribute(QWebEngineSettings::ScreenCaptureEnabled, false);
     settings->setAttribute(QWebEngineSettings::AllowRunningInsecureContent, false);
-    settings->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
+    // Contenido local (file://, qrc:) no puede hacer peticiones XHR/fetch a
+    // URLs remotas: evita robo de datos desde un HTML local malicioso.
+    settings->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
     settings->setAttribute(QWebEngineSettings::PlaybackRequiresUserGesture, false);
 
     m_layout->setContentsMargins(0, 0, 0, 0);

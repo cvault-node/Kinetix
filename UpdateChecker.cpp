@@ -69,8 +69,11 @@ int UpdateChecker::compareVersions(const QString &a, const QString &b)
     const QStringList pb = parts(b);
     const int n = qMax(pa.size(), pb.size());
     for (int i = 0; i < n; ++i) {
-        const int va = i < pa.size() ? pa.at(i).toInt() : 0;
-        const int vb = i < pb.size() ? pb.at(i).toInt() : 0;
+        // toLongLong y no toInt: un numero de version que no cabe en un int
+        // (por ejemplo una marca de tiempo) devolvia 0 y hacia que una version
+        // nueva pareciese mas antigua.
+        const qint64 va = i < pa.size() ? pa.at(i).toLongLong() : 0;
+        const qint64 vb = i < pb.size() ? pb.at(i).toLongLong() : 0;
         if (va != vb)
             return va < vb ? -1 : 1;
     }

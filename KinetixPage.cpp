@@ -30,7 +30,10 @@ void KinetixPage::installHoverScript()
 {
     QWebEngineScript script;
     script.setName(QStringLiteral("kinetix-hover"));
-    script.setInjectionPoint(QWebEngineScript::DocumentReady);
+    // Se inyecta lo antes posible (DocumentCreation) para capturar la función
+    // console.info original: si la web la sustituye en su propio <script>, no
+    // puede leer el nonce de los mensajes que emite este script.
+    script.setInjectionPoint(QWebEngineScript::DocumentCreation);
     script.setWorldId(QWebEngineScript::MainWorld);
     script.setRunsOnSubFrames(true);
     // El nonce viaja solo dentro del codigo inyectado, nunca en el DOM.
@@ -42,8 +45,13 @@ void KinetixPage::installHoverScript()
     script.setSourceCode(QStringLiteral(R"JS(
 (function(){
   var NONCE = "%1";
+  // Referencia directa a la consola original: la web no puede sustituirla
+  // despues para interceptar el nonce.
+  var info = (typeof console !== 'undefined' && console.info)
+             ? console.info.bind(console)
+             : function(){};
   function send(u){
-    try { console.info('KINETIX-LINK:' + NONCE + ':' + (u || '')); } catch (e) {}
+    try { info('KINETIX-LINK:' + NONCE + ':' + (u || '')); } catch (e) {}
   }
   function linkOf(el){
     while (el && el.nodeType === 1) {

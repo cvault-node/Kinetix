@@ -102,7 +102,7 @@ private slots:
     void updateStatusBarVisibility();
     void onLinkHovered(const QString &url);
     void updateNavigationState();
-    void updateUrlBarFromCurrent();
+    void updateUrlBarFromCurrent(bool force = false);
     void updateZoomStatus(bool force = false);
     void registerHistoryOnLoadFinished(bool ok);
     void updateBookmarksList();
@@ -123,6 +123,7 @@ private:
     void positionFindBar();
     void positionLinkBubble();
     void fillHistoryList(QListWidget *list, const QString &filter);
+    void setSetting(const QString &key, const QVariant &value);
     void applyTheme();
     QString buildHomePage();
     void refreshHomeTabs();
@@ -228,6 +229,9 @@ private:
     bool m_showBookmarkBar;
     bool m_showTabsSidebar;
     QString m_searchEngine;
+    // Última URL que el navegador escribió en la barra de direcciones: sirve
+    // para saber si el usuario está editando el campo y no pisar su texto.
+    QString m_lastUrlShown;
     QMap<QString, QVariantMap> m_bookmarks;
     QList<QVariantMap> m_history;
     QList<QVariantMap> m_closedTabs;

@@ -5,6 +5,69 @@ Todos los cambios relevantes de este proyecto se documentan en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y el proyecto sigue el [Versionado Semántico](https://semver.org/lang/es/).
 
+## [1.1.2] - 2026-10-19
+
+Parche de correcciones: no se añade ninguna funcionalidad nueva.
+
+### Corregido
+- **Parpadeo en páginas modernas (flags de GPU)**: se quitaron los flags que el motor no soporta y los que Chrome/Edge no usan.
+  - `SkiaGraphite` sin backend: el proceso de GPU arrancaba avisando en cada carga de página (`Skia Graphite backend = "" not found - falling back to Ganesh!`) mientras componía con Skia/Ganesh. Ya no se activa.
+  - `Vulkan`: el motor avisaba `Vulkan disabled or failed to initialize`. Ya no se activa.
+  - `--enable-zero-copy`: presenta los fotogramas a través de "mailboxes" de D3D11 que en gráficas antiguas se pierden y dejan el fotograma a medias (`SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox`). Chrome y Edge no lo activan. Eliminado.
+  - `--disable-gpu-driver-bug-workarounds`: Chrome y Edge no lo usan y desactivaba justamente los parches del driver que evitan fallos de composición. Eliminado.
+  - Con lo anterior, el registro de errores del proceso de GPU queda **limpio** al abrir cualquier web.
+- **Ajuste "Rasterizado por GPU"**: se guardaba pero no se aplicaba nunca (el flag estaba siempre activo). Ahora el ajuste manda de verdad y se documenta como estaba.
+- **Límite de procesos de renderizado**: en equipos con 4 GB o menos se ponía a 2, y con varias pestañas abiertas las nuevas cargas esperaban a que se liberara un proceso. El mínimo sube a 4 (el proceso principal y el de GPU no cuentan para este límite).
+- **Carga de páginas lenta (modo software)**: con la composición por software activada, cargar una web tardaba entre un 30 % y un 50 % más y el desplazamiento iba a 12 FPS en lugar de 60. Con los flags de GPU corregidos, volver a composición por GPU ya no produce parpadeo en las gráficas antiguas.
+- **Codificación de `main.cpp`**: el archivo estaba guardado con doble codificación UTF-8 y 64 líneas de comentarios se leían con los acentos corruptos ("Ã­" en vez de "í"). Corregido.
+- **Ajustes inertes**: "Do Not Track", "Mostrar URL completa" y "Máximo de conexiones"/"Timeout" se guardaban pero no se aplicaban nunca. El de máximo de conexiones y timeout se documenta como pendiente de implementar; los otros dos siguen sin efecto.
+- **Dominios escritos sin protocolo**: las expresiones regulares de `Utils.cpp` tenían el punto mal escapado (`\\\\.` en vez de `\\.`), así que nunca casaban con un dominio. Escribir `ejemplo.com` en la barra de direcciones lanzaba una búsqueda en Google en lugar de abrir la página. También se han arreglado las IP locales (`127.0.0.1`, `0.0.0.0`), que no se reconocían.
+- **Cierre de la aplicación**: el perfil de Chromium se destruía antes que la ventana, dejando páginas apuntando a un perfil ya liberado (uso de memoria liberada al salir). Ahora la ventana se cierra antes que el perfil.
+- **Tamaño de la caché HTTP**: con 2048 MB el valor se pasaba de `int` y salía negativo, con lo que Chromium desactivaba la caché. El tamaño se recorta al máximo representable.
+- **Descargas que se quedaban colgadas**: una petición de descarga con nombre vacío o no válido se quedaba para siempre sin empezar ni fallar. Ahora se cancela explícitamente.
+- **Descargas en curso mostradas como "Fallida"**: la entrada del historial se guardaba con el estado inicial y solo se actualizaba al terminar, así que el panel y el diálogo mostraban un error y un botón "Reintentar" en lugar de "En progreso" y "Cancelar".
+- **Ruta de la descarga**: se construía concatenando "/" a mano y podía quedar vacía. Ahora se usa la ruta real del archivo (con el directorio de descargas por defecto si el motor no lo fija) y se sincroniza con el nombre definitivo.
+- **Panel de descargas congelado**: al cerrar y volver a abrir el panel, el temporizador de actualización no se reiniciaba y el progreso, la velocidad y el tiempo restante se quedaban parados.
+- **Iconos de estado de las descargas** (completada / en progreso / cancelada / fallida): no existían y salían en blanco. Ahora se dibujan.
+- **Icono de recargar y estrella de favoritos**: el glifo de recarga era un círculo con un corchete suelto y la estrella se dibujaba abierta. Ambos corregidos.
+- **Ajuste "Al iniciar"**: se leía con `findData()` sobre un desplegable sin datos de usuario, así que siempre marcaba "Página de inicio" y, al guardar, borraba la opción elegida (incluida "Restaurar sesión anterior").
+- **"Pestaña en blanco"**: la opción no hacía nada; ahora abre una pestaña vacía.
+- **Restaurar sesión**: el índice de la pestaña activa se guardaba sobre la lista completa de pestañas pero al restaurar solo se reabren las http, de modo que se volvía a la página equivocada.
+- **Motor de búsqueda**: la barra de direcciones siempre usaba Google, ignorando el motor elegido en Configuración.
+- **Barra de direcciones**: una pestaña en segundo plano que terminaba de cargar borraba lo que el usuario estaba escribiendo, y la URL ya no se actualizaba al cambiar de pestaña.
+- **Contador de "buscar en la página"**: un resultado tardío de otra pestaña machacaba el contador de la pestaña activa.
+- **Borrar todos los datos de navegación**: se dejaban dos pestañas abiertas (una con su sesión y sus cookies) en vez de cerrarlas todas.
+- **Ventana privada**: se guardaban en el `config.ini` compartido los nombres de los accesos rápidos y los ajustes globales, pisando los de la ventana normal. También se llevaba las descargas del perfil normal.
+- **Buscador de faviconos de Google**: la URL de la página se pegaba sin codificar en la consulta, así que sus `?`, `&` o `#` rompían la petición; además no se creaba la carpeta de iconos y el resultado no se guardaba nunca.
+- **Nombres de accesos rápidos**: al borrar un acceso su nombre personalizado se quedaba guardado y se acumulaban entradas obsoletas en la configuración.
+- **Página de inicio**: tras borrar el historial seguían mostrándose los accesos eliminados.
+- **Botón "+" de la barra de pestañas**: con muchas pestañas quedaba fuera de la barra y no se podía abrir una pestaña con el ratón.
+- **Anclajes**: se podían crear anclados muertos (portada interna) y un anclado existente se sustituía sin avisar, perdiendo su URL.
+- **Reintentar una descarga** ya no se hace en la pestaña actual (perdía la página abierta), sino en una pestaña nueva.
+- **Aviso de enlace**: la web podía capturar el token anti-falsificación sustituyendo `console.info`; ahora el script lo captura antes de que la página ejecute su propio código.
+- **Comparación de versiones**: un número de versión que no cabía en un `int` se comparaba como 0, y una versión nueva podía parecer antigua.
+- Avisos de Qt por instalar dos veces el mismo layout (diálogo de descargas y editor de código).
+- **Versión del ejecutable**: las propiedades del archivo en Windows seguían diciendo 1.1.0.0; ahora marcan la versión real.
+- **Inicio de sesión con Google en X (OAuth)**: Chromium 140 bloquea por defecto las cookies de terceros, lo que rompía el inicio de sesión con Google en sitios como X. Se añade la opción (desactivada por defecto) y las ventanas emergentes de inicio de sesión vuelven a abrirse como **ventana real** en lugar de pestaña, con permisos y certificados denegados por defecto.
+- **Historial asignado a la pestaña equivocada**: cada carga terminada se registraba en la pestaña activa en ese instante; si el usuario cambiaba de pestaña mientras otra cargaba, la entrada iba a la incorrecta. Ahora se registra en la pestaña que realmente terminó de cargar (y solo si sigue abierta).
+- **Atajo de zoom**: la tecla `0` a secas reiniciaba el zoom al escribir el carácter en cualquier página; ahora el atajo es `Ctrl+0`.
+- **Descargas duplicadas**: descargar dos veces el mismo archivo (misma ruta) añadía una segunda entrada al historial; ahora se reemplaza la existente.
+- **Cancelar descargas en curso**: se añade el botón "Cancelar" a las descargas activas (antes no había forma de detener una descarga en marcha).
+- **Modo privado (aislamiento)**: la ventana privada cargaba y guardaba el historial y las descargas del perfil normal; ahora no los lee ni los escribe, y las descargas privadas no se mezclan con las normales.
+- **Vídeo ligero y vídeos no decodificables**: el optimizador pausaba y reanudaba también los vídeos que el motor no puede decodificar (H.264/AAC, ausentes en este motor), provoke reintentos de carga del stream y repintados en las páginas con muchos vídeos. Ahora solo interviene sobre vídeos reproducibles.
+- **Favicons de Google (privacidad)**: la petición a `google.com/s2/favicons` enviaba a Google el dominio de cada sitio visitado; ahora está desactivada por defecto y solo se usa si el usuario la activa en Privacidad. Los iconos normales los da la propia web.
+- **Contenido local sin acceso a la red remota**: se impide que una página local (`file://`) haga peticiones XHR/fetch a URLs remotas (`LocalContentCanAccessRemoteUrls`), evitando robo de datos desde un HTML local malicioso.
+- **Puente nativo (`QWebChannel`) al navegar**: el objeto `kinetix` se desregistraba solo al empezar/terminar la carga, dejando una ventana en la que una web externa podía llamar a métodos nativos; ahora se desregistra en cuanto cambia la URL.
+- **Aviso de enlace (repintados)**: la burbuja con la URL se redibujaba y reposicionaba en cada `mouseover`, incluso sobre el mismo enlace; ahora no hace nada si el enlace no ha cambiado.
+- **Restaurar sesión anterior**: la opción se guardaba pero no se aplicaba al arrancar; ahora reabre las pestañas `http`/`https` guardadas al cerrar (las ventanas privadas siempre abren la página de inicio).
+- **Administrador de tareas**: usa un identificador estable por pestaña en lugar de punteros, que quedaban colgando al cerrar una pestaña.
+- **Proceso de renderizado caído**: si el proceso de una pestaña se interrumpe (normalmente por falta de memoria), ahora se avisa y se recarga la página en lugar de dejar la pestaña muerta en blanco.
+- **Página de inicio**: los botones Editar/Borrar usaban un marcador roto (`%5`); ahora funcionan, con un estilo más simple y el menú ⋮ siempre dentro de la ventana.
+
+### Limitación conocida
+- **Los vídeos en MP4/HLS no se reproducen** (X/Twitter, Instagram y casi todas las webs). La causa está en el motor, no en Kinetix: las compilaciones oficiales de Qt WebEngine compilan Chromium **sin los códecs propietarios**, así que **H.264 y AAC no existen**. Verificado en este motor: `canPlayType('video/mp4; codecs="avc1.42E01E"')` devuelve vacío y un stream HLS real falla con `MEDIA_ERR_SRC_NOT_SUPPORTED` (código 4), mientras que los de WebM/VP8 y VP9 se reproducen con normalidad (`readyState 4`, 640×360). No hay ningún flag que lo resuelva: hay que recompilar Qt WebEngine con FFmpeg de marca "Chrome" (`proprietary_codecs = true`).
+- Si tras esta versión sigue viéndose parpadeo en alguna web concreta, el ajuste **Rasterizado por GPU** de Configuración ▸ Rendimiento (que hasta ahora no hacía nada) permite desactivarlo, y `KINETIX_GPU_MODE=softcomp` fuerza la composición por software.
+
 ## [1.1.1] - 2026-10-15
 
 ### Corregido
