@@ -21,8 +21,8 @@ Instaladores y paquetes listos para usar en la página de **[Releases](https://g
 
 | Sistema | Archivo | Tipo |
 |---------|---------|------|
-| **Windows** | `Kinetix-1.0.0-win64.exe` | Instalador (NSIS) |
-| **Windows** | `Kinetix-1.0.0-win64.zip` | Portable (descomprimir y ejecutar) |
+| **Windows** | `Kinetix-1.1.2-win64.exe` | Instalador (NSIS) |
+| **Windows** | `Kinetix-1.1.2-win64.zip` | Portable (descomprimir y ejecutar) |
 | **Linux** | `Kinetix-x86_64.AppImage` | Portable (AppImage) |
 
 > En Linux: `chmod +x Kinetix-x86_64.AppImage && ./Kinetix-x86_64.AppImage`
@@ -118,8 +118,8 @@ Requiere [NSIS](https://nsis.sourceforge.io/) instalado.
 
 ```powershell
 cd build
-cpack -C Release -G NSIS   # Kinetix-1.0.0-win64.exe
-cpack -C Release -G ZIP    # Kinetix-1.0.0-win64.zip
+cpack -C Release -G NSIS   # Kinetix-1.1.2-win64.exe
+cpack -C Release -G ZIP    # Kinetix-1.1.2-win64.zip
 ```
 
 Las dependencias de Qt se despliegan automáticamente con `windeployqt`.
