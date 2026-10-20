@@ -24,6 +24,9 @@ public:
 
 signals:
     void linkHovered(const QString &url);
+    // Un vídeo de la página no se puede decodificar con este motor (H.264/AAC
+    // no vienen en las compilaciones oficiales de Qt WebEngine).
+    void codecUnsupported();
 
 protected:
     void javaScriptConsoleMessage(JavaScriptConsoleMessageLevel level, const QString &message,

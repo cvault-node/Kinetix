@@ -89,26 +89,44 @@ int main(int argc, char *argv[])
           << QStringLiteral("--renderer-process-limit=%1").arg(rendererLimit)
           << QStringLiteral("--num-raster-threads=%1").arg(rasterThreads)
           // "Vulkan" y "SkiaGraphite" NO se activan: en este motor no hay
-          // backend de Graphite ni Vulkan disponibles, y activarlos a medias
-          // dejaba al proceso de GPU avisando por stderr
+          // ningun backend de Graphite compilado (probados "d3d12", "d3d",
+          // "vulkan", "metal", "warp" y "default": todos rechazados) y
+          // Vulkan tampoco inicializa. Activarlos a medias solo hacia que el
+          // proceso de GPU avisara por stderr en cada carga de pagina
           // ("Skia Graphite backend = \"\" not found - falling back to
           // Ganesh!" y "Vulkan disabled or failed to initialize") mientras
-          // componia con Skia/Ganesh. Se usa Skia, que es el renderizador
-          // por defecto de Chromium.
+          // componia igual con Skia/Ganesh, que es el renderizador por defecto
+          // de Chromium.
           << QStringLiteral("--enable-features=BackForwardCache,NetworkServiceInProcess,ParallelDownloading,UseSkiaRenderer,CanvasOopRasterization")
           << QStringLiteral("--disable-features=CalculateNativeWinOcclusion,Translate,OptimizationGuideModelDownloading,InterestFeedContentSuggestions,AutofillServerCommunication,MediaRouter,GlobalMediaControls,LoadingWithMojo,SpareRendererForSitePerProcess,UseChromeOSDirectVideoDecoder")
           << QStringLiteral("--disable-background-networking")
           << QStringLiteral("--use-gl=angle")
           << QStringLiteral("--use-angle=d3d11")
           << QStringLiteral("--force-color-profile=srgb");
-    // Ni "--enable-zero-copy" ni "--disable-gpu-driver-bug-workarounds": Chrome
-    // y Edge no los usan. El zero-copy presenta los fotogramas a traves de
-    // "mailboxes" de D3D11 que en graficas antiguas (Intel UHD 600 con driver de
-    // 2020, por ejemplo) se pierden y dejan el fotograma a medias
+    // "--disable-gpu-driver-bug-workarounds" se mantiene como en la 1.1.1: es
+    // el unico flag de este grupo que toca el pipeline de render del driver, y
+    // en las Intel UHD 600/620 con driver de 2020 los parches del driver
+    // (ANGLE/ANGLE) son los que evitan que el contenido se vea con otros
+    // colores. Se puede desactivar desde Configuracion > Rendimiento si en
+    // algun equipo produce parpadeo.
+    if (rec.value(QStringLiteral("rendimiento/workarounds_driver"), true).toBool())
+        flags << QStringLiteral("--disable-gpu-driver-bug-workarounds");
+    // "--enable-zero-copy" NO se activa: presenta los fotogramas a traves de
+    // "mailboxes" de D3D11 que en graficas antiguas (Intel UHD 600 con driver
+    // de 2020, por ejemplo) se pierden y dejan el fotograma a medias
     // ("SharedImageManager::ProduceSkia: Trying to Produce a Skia
     // representation from a non-existent mailbox"), lo que se ve como
-    // parpadeo. Y desactivar los parches del driver quitaba justamente las
-    // protecciones que evitan fallos de composicion en esos drivers.
+    // parpadeo. Chrome y Edge tampoco lo activan.
+    //
+    // El ajuste "rendimiento/flags_legacy" devuelve los flags exactamente
+    // como estaban en la 1.1.1, por si en algun equipo con un perfil de
+    // color raro esos eran los que dejaban los colores bien.
+    const bool legacyFlags = rec.value(QStringLiteral("rendimiento/flags_legacy"), false).toBool();
+    if (legacyFlags) {
+        flags.removeAll(QStringLiteral("--enable-features=BackForwardCache,NetworkServiceInProcess,ParallelDownloading,UseSkiaRenderer,CanvasOopRasterization"));
+        flags << QStringLiteral("--enable-features=BackForwardCache,NetworkServiceInProcess,ParallelDownloading,Vulkan,UseSkiaRenderer,CanvasOopRasterization,SkiaGraphite");
+        flags << QStringLiteral("--enable-zero-copy");
+    }
 
     // Modo de dispositivo de gama baja (Chromium). Reduce el tamaño del caché
     // de imágenes, el número de tiles rasterizados por fotograma, los límites
@@ -243,7 +261,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     app.setApplicationName("Kinetix");
     app.setApplicationDisplayName("Kinetix");
-    app.setApplicationVersion("1.1.2");
+    app.setApplicationVersion("1.1.3");
     app.setOrganizationName("CuriosVault");
     app.setOrganizationDomain("curiosvault.dev");
     QIcon appIcon(QStringLiteral(":/icons/Kinetix-ico.ico"));

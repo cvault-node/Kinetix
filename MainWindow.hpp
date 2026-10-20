@@ -83,6 +83,8 @@ private slots:
     void setHomeBridge(class QWebChannel *channel, class HomeBridge *bridge, bool internal);
     void showAbout();
     void checkForUpdates(bool manual = true);
+    void detectCodecSupport();
+    void showCodecWarning();
     void showHistoryDialog();
     void showTaskManager();
     void openPrivateWindow();
@@ -241,6 +243,11 @@ private:
     QPointer<QWebEnginePage> m_webFullscreenPage;
     bool m_freezeAllForHidden = false;
     bool m_privateMode = false;
+    // Estado real de los códecs de este motor: las compilaciones oficiales de
+    // Qt WebEngine no incluyen H.264/AAC, así que los vídeos MP4/HLS no se
+    // reproducen. Se comprueba al arrancar, no se supone.
+    bool m_h264Supported = false;
+    bool m_codecWarningShown = false;
 
     QWidget *m_findBar = nullptr;
     QLineEdit *m_findInput = nullptr;

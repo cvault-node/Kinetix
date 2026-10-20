@@ -17,12 +17,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "Kinetix"
             VALUE "FileDescription",  "Kinetix - Navegador web rapido y ligero"
-            VALUE "FileVersion",      "1.1.2.0"
+            VALUE "FileVersion",      "1.1.3.0"
             VALUE "InternalName",     "Kinetix"
-            VALUE "LegalCopyright",   "Kinetix 1.1.2"
+            VALUE "LegalCopyright",   "Kinetix 1.1.3"
             VALUE "OriginalFilename", "Kinetix.exe"
             VALUE "ProductName",      "Kinetix"
-            VALUE "ProductVersion",   "1.1.2.0"
+            VALUE "ProductVersion",   "1.1.3.0"
         END
     END
     BLOCK "VarFileInfo"

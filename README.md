@@ -89,8 +89,41 @@ Instaladores y paquetes listos para usar en la página de **[Releases](https://g
 > van con Chromium compilado **sin los códecs propietarios**, así que **H.264
 > (MP4) y AAC no están disponibles**. Los vídeos que sirven X/Twitter, Instagram o
 > la mayoría de webs en MP4/HLS **no se reproducen**; los de WebM (VP8, VP9) y
-> AV1 sí. No hay ningún flag que lo arregle: hay que recompilar Qt WebEngine con
-> FFmpeg de marca "Chrome" (`proprietary_codecs = true`).
+> AV1 sí.
+>
+> **No hay ningún flag ni plugin que lo arregle**: la única vía es recompilar el
+> módulo Qt WebEngine con los códecs incluidos. El script
+> [`tools/build_webengine_codecs.ps1`](tools/build_webengine_codecs.ps1) (Windows)
+> y [`tools/build_webengine_codecs.sh`](tools/build_webengine_codecs.sh) (Linux)
+> lo hacen de forma desatendida:
+>
+> ```powershell
+> .\tools\build_webengine_codecs.ps1 -QtVersion 6.11.2 -QtDir C:\Qt\6.11.2\msvc2022_64
+> ```
+>
+> | Requisito | Valor |
+> |---|---|
+> | RAM | **16 GB o más** (Chromium no compila con menos) |
+> | Disco libre | **~60 GB** |
+> | Tiempo | 2-6 horas |
+> | Herramientas | Visual Studio 2022 (14.36+) con Windows 11 SDK 10.0.26100+, Node 20+, Python 3.8+, Ninja, bison, flex, gperf |
+>
+> Después se compila Kinetix contra esa copia:
+>
+> ```powershell
+> cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="qt-webengine-codecs;C:\Qt\6.11.2\msvc2022_64"
+> cmake --build build --config Release
+> ```
+>
+> **Licencias:** H.264 y AAC son códecs propietarios. Compilarlos requiere aceptar
+> las condiciones de Access Advance (MPEG LA) y de Via Licensing (AAC). Para uso
+> interno no hay problema; para **distribuir** un navegador con ellos hay que
+> obtener las licencias correspondientes. WebM/VP8/VP9/AV1 y MP3 no tienen esa
+> restricción.
+>
+> Kinetix detecta al arrancar si el motor puede decodificar H.264 y lo indica en
+> **Acerca de**; si un vídeo falla por esto, avisa en la barra de estado en vez de
+> dejar un reproductor negro sin explicación.
 
 ### Windows (MSVC)
 

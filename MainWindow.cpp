@@ -2,6 +2,7 @@
 #include "Utils.hpp"
 #include "CodeEditor.hpp"
 #include "BrowserTab.hpp"
+#include "KinetixPage.hpp"
 #include "Theme.hpp"
 #include "UpdateChecker.hpp"
 
@@ -1114,6 +1115,53 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent, bool private
     // botón de pantalla completa de los vídeos (YouTube, etc.) no hace nada.
     prof->settings()->setAttribute(QWebEngineSettings::FullScreenSupportEnabled, true);
 
+    // Aviso de vídeo no reproducible. Este motor (Qt WebEngine oficial) se
+    // compila SIN los códecs propietarios, así que los vídeos en MP4/HLS
+    // (X/Twitter, Instagram y casi todas las webs) fallan con
+    // MEDIA_ERR_SRC_NOT_SUPPORTED y el reproductor se queda en negro sin
+    // explicación. Este script avisa al navegador para que pueda informar.
+    {
+        QWebEngineScript codecWatch;
+        codecWatch.setName(QStringLiteral("kinetix-codec-watch"));
+        codecWatch.setInjectionPoint(QWebEngineScript::DocumentReady);
+        codecWatch.setWorldId(QWebEngineScript::MainWorld);
+        codecWatch.setRunsOnSubFrames(false);
+        codecWatch.setSourceCode(QStringLiteral(R"JS(
+(() => {
+  if (window.__kinetixCodecWatch) return;
+  window.__kinetixCodecWatch = true;
+  var told = false;
+  function warn() {
+    if (told) return;
+    told = true;
+    try { console.info('KINETIX-CODEC:unsupported'); } catch (e) {}
+  }
+  function watch(v) {
+    if (!v || v.__kinetixWatched) return;
+    v.__kinetixWatched = true;
+    // Solo cuenta si el usuario lo ha intentado: el autoplay mudo que hacen
+    // muchas webs no debe disparar el aviso.
+    v.addEventListener('play', function () {
+      if (v.error && v.error.code === 4) warn();
+    }, true);
+    v.addEventListener('error', function () {
+      if (v.error && v.error.code === 4) warn();
+    }, true);
+  }
+  function scan() {
+    var vs = document.getElementsByTagName('video');
+    for (var i = 0; i < vs.length; i++) watch(vs[i]);
+  }
+  scan();
+  document.addEventListener('play', function (e) {
+    if (e.target && e.target.tagName === 'VIDEO') watch(e.target);
+  }, true);
+  [1000, 3000, 8000].forEach(function (ms) { setTimeout(scan, ms); });
+})();
+)JS"));
+        prof->scripts()->insert(codecWatch);
+    }
+
     // Optimización de vídeo "ligero": en páginas con vídeos que arrancan solos
     // (típicas de portales de noticias), pausa los que están en silencio y
     // fuera de pantalla, y evita descargar los que no se usan. Reduce CPU y
@@ -1272,6 +1320,7 @@ MainWindow::MainWindow(QWebEngineProfile *profile, QWidget *parent, bool private
         updateTabsSidebar();
         updateZoomStatus();
         refreshDownloadsButton();
+        detectCodecSupport();
     });
 
     const QByteArray geo = m_settings->value(QStringLiteral("ventana/geometry")).toByteArray();
@@ -2182,6 +2231,11 @@ BrowserTab *MainWindow::newTab(const QString &url)
 
     auto *page = tab->webView()->page();
 
+    // Un vídeo que el motor no puede decodificar (H.264/AAC): se avisa al
+    // usuario en vez de dejar un reproductor negro sin explicación.
+    if (auto *kp = qobject_cast<KinetixPage *>(page))
+        connect(kp, &KinetixPage::codecUnsupported, this, &MainWindow::showCodecWarning);
+
     connect(page, &QWebEnginePage::findTextFinished, this,
             [this, page](const QWebEngineFindTextResult &result) {
                 if (!m_findBar || !m_findBar->isVisible() || !m_findCount)
@@ -2738,12 +2792,21 @@ void MainWindow::showAbout()
     about.setWindowTitle(tr("Acerca de Kinetix"));
     about.setIcon(QMessageBox::Information);
     about.setText(QStringLiteral("<h2>Kinetix %1</h2>").arg(QCoreApplication::applicationVersion()));
+    const QString codecInfo = m_h264Supported
+        ? tr("<p><b>Vídeos MP4/HLS:</b> soportados (H.264 y AAC disponibles).</p>")
+        : tr("<p><b>Vídeos MP4/HLS:</b> <b>no soportados</b>. Este motor se ha compilado "
+             "sin los códecs propietarios, así que los vídeos en MP4/HLS (X/Twitter, "
+             "Instagram y casi todas las webs) no se reproducen. Los de WebM/VP8, "
+             "VP9, AV1 y MP3 sí. No hay ningún flag que lo arregle: hace falta "
+             "recompilar Qt WebEngine con <code>-DQT_FEATURE_webengine_proprietary_codecs=ON</code> "
+             "(ver <code>tools/build_webengine_codecs.ps1</code>).</p>");
     about.setInformativeText(tr(
         "<p>Navegador web r&aacute;pido y ligero, desarrollado por <b>CuriosVault</b> en C++ con Qt %2 y Chromium 140.</p>"
         "<p><a href=\"https://github.com/cvault-node/Kinetix\"><b>GitHub</b></a> | <a href=\"https://github.com/cvault-node/Kinetix/releases\">Descargas</a></p>"
-        "<p>Versi&oacute;n: %1</p>"
-        "<p>Licencia MIT</p>")
-        .arg(QCoreApplication::applicationVersion(), QStringLiteral(QT_VERSION_STR)));
+        "<p>Versi&oacute;n: %1</p>")
+        .arg(QCoreApplication::applicationVersion(), QStringLiteral(QT_VERSION_STR))
+        + codecInfo
+        + tr("<p>Licencia MIT</p>"));
     about.setStandardButtons(QMessageBox::NoButton);
     QPushButton *checkBtn = about.addButton(tr("Buscar actualizaciones"), QMessageBox::ActionRole);
     QPushButton *notesBtn = about.addButton(tr("Ver novedades"), QMessageBox::ActionRole);
@@ -2760,6 +2823,51 @@ void MainWindow::showAbout()
             checkForUpdates(false);
         }
     }
+}
+
+void MainWindow::detectCodecSupport()
+{
+    // Se pregunta al propio motor qué formatos puede decodificar, en vez de
+    // suponerlo: si alguien compila Qt WebEngine con los códecs propietarios,
+    // aquí se detecta y el aviso no aparece.
+    BrowserTab *tab = qobject_cast<BrowserTab *>(m_tabs->currentWidget());
+    if (!tab)
+        return;
+    QWebEnginePage *page = tab->webView()->page();
+    if (!page)
+        return;
+    const QString js = QStringLiteral(R"JS(
+(function(){
+  try {
+    var v = document.createElement('video');
+    return (v.canPlayType('video/mp4; codecs="avc1.42E01E"').length > 0) ? '1' : '0';
+  } catch (e) { return '0'; }
+})()
+)JS");
+    page->runJavaScript(js, [this](const QVariant &result) {
+        m_h264Supported = (result.toString() == QLatin1String("1"));
+    });
+}
+
+void MainWindow::showCodecWarning()
+{
+    if (m_h264Supported)
+        return;
+    if (m_codecWarningShown)
+        return;
+    m_codecWarningShown = true;
+    const QString msg = tr(
+        "Este vídeo usa un códec (H.264/AAC) que este motor no incluye, así que no se "
+        "puede reproducir.\n\n"
+        "Las compilaciones oficiales de Qt WebEngine se compilan sin los códecs "
+        "propietarios; los vídeos en WebM (VP8/VP9), AV1 y MP3 sí se reproducen.\n\n"
+        "No hay ningún ajuste que lo arregle: hace falta recompilar Qt WebEngine con "
+        "-DQT_FEATURE_webengine_proprietary_codecs=ON (hay un script en "
+        "tools/build_webengine_codecs.ps1).");
+    statusBar()->showMessage(tr("Vídeo no reproducible: falta el códec H.264/AAC en el motor."), 10000);
+    // Aviso visible una sola vez: la barra de estado está oculta y el usuario
+    // no llegaría a saber por qué el vídeo no se reproduce.
+    QMessageBox::information(this, tr("Vídeo no reproducible"), msg);
 }
 
 void MainWindow::checkForUpdates(bool manual)
@@ -4717,6 +4825,18 @@ void MainWindow::showSettingsDialog()
     gpuComp->setChecked(m_settings->value("rendimiento/composicion_gpu", false).toBool());
     gpuComp->setToolTip(tr("Rápido, pero en gráficas Intel antiguas puede parpadear. Para navegación "
                            "sin parpadeo deja esta casilla desactivada. Se aplica al reiniciar."));
+    auto *driverWorkarounds = new QCheckBox(tr("Correcciones de color del driver (Intel)"), perf);
+    driverWorkarounds->setChecked(m_settings->value("rendimiento/workarounds_driver", true).toBool());
+    driverWorkarounds->setToolTip(tr("Mantiene los parches del driver de la GPU, que en las Intel "
+                                     "UHD 600/620 evitan que el contenido de las webs se vea con "
+                                     "los colores alterados. Desactívalo solo si el navegador "
+                                     "te parpadea. Se aplica al reiniciar."));
+    auto *legacyFlags = new QCheckBox(tr("Flags de render antiguos (1.1.1)"), perf);
+    legacyFlags->setChecked(m_settings->value("rendimiento/flags_legacy", false).toBool());
+    legacyFlags->setToolTip(tr("Vuelve a los flags de renderizado de la versión 1.1.1 "
+                                "(Vulkan, SkiaGraphite y zero-copy). Úsalo solo si con los "
+                                "actuales ves las webs con los colores alterados. Se aplica "
+                                "al reiniciar."));
 
 
     perfLayout->addWidget(new QLabel(tr("<b>Recursos de renderizado</b> (requieren reinicio)"), perf));
@@ -4734,6 +4854,8 @@ void MainWindow::showSettingsDialog()
     perfLayout->addWidget(videoHw);
     perfLayout->addWidget(gpuRaster);
     perfLayout->addWidget(gpuComp);
+    perfLayout->addWidget(driverWorkarounds);
+    perfLayout->addWidget(legacyFlags);
     perfLayout->addSpacing(8);
     auto *btnOptimal = new QPushButton(tr("Usar configuración óptima para este equipo"), perf);
     btnOptimal->setToolTip(tr("Ajusta automáticamente GPU, vídeo y composición a lo más "
@@ -4802,7 +4924,8 @@ void MainWindow::showSettingsDialog()
     connect(saveBtn, &QPushButton::clicked, dialog, [this, dialog, dark, bookBar, tabsSide, showFullUrl, engine, startup,
                                                       doNotTrack, blockThirdParty, faviconGoogle, chkGpu, spGpuMb, spRamMb, spCacheMb,
                                                        freezeBg, prefetch, videoLight, videoHw, gpuRaster, gpuComp,
-                                                      spMaxCon, spTimeout,
+                                                       driverWorkarounds, legacyFlags,
+                                                       spMaxCon, spTimeout,
                                                       uaCompat, oldGpuOn, oldGpuMb, oldRamMb]() {
         toggleDarkMode(dark->isChecked());
         m_showBookmarkBar = bookBar->isChecked();
@@ -4878,6 +5001,16 @@ void MainWindow::showSettingsDialog()
             QMessageBox::information(dialog, tr("Composición por GPU"),
                 tr("El modo de composición se aplicará al reiniciar el navegador. "
                    "Activarlo hace la navegación más rápida, pero en gráficas Intel antiguas puede parpadear."));
+        }
+        if (driverWorkarounds->isChecked() != m_settings->value(QStringLiteral("rendimiento/workarounds_driver"), true).toBool()) {
+            setSetting(QStringLiteral("rendimiento/workarounds_driver"), driverWorkarounds->isChecked());
+            QMessageBox::information(dialog, tr("Correcciones de color del driver"),
+                tr("El ajuste se aplicará al reiniciar el navegador."));
+        }
+        if (legacyFlags->isChecked() != m_settings->value(QStringLiteral("rendimiento/flags_legacy"), false).toBool()) {
+            setSetting(QStringLiteral("rendimiento/flags_legacy"), legacyFlags->isChecked());
+            QMessageBox::information(dialog, tr("Flags de render antiguos"),
+                tr("El ajuste se aplicará al reiniciar el navegador."));
         }
 
         setSetting(QStringLiteral("avanzado/max_conexiones"), spMaxCon->value());

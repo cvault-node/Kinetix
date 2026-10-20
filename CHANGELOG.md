@@ -5,6 +5,19 @@ Todos los cambios relevantes de este proyecto se documentan en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y el proyecto sigue el [Versionado Semántico](https://semver.org/lang/es/).
 
+## [1.1.3] - 2026-10-19
+
+Parche de correcciones: no se añade ninguna funcionalidad nueva.
+
+### Corregido
+- **Color del contenido en Intel**: se restituye `--disable-gpu-driver-bug-workarounds`, que se había quitado en la 1.1.2. Es el único flag de ese grupo que toca el pipeline de render del driver, y en las Intel UHD 600/620 con driver de 2020 los parches del driver son los que evitan que las webs se vean con los colores alterados. Ahora se puede desactivar desde Configuración ▸ Rendimiento.
+- **SkiaGraphite y Vulkan**: se comprobó que **ningún backend de Skia Graphite está compilado en este motor** (probados `d3d12`, `d3d`, `vulkan`, `metal`, `warp` y `default`: todos rechazados) y que Vulkan tampoco inicializa. Activarlos no hacía nada más que llenar el registro de errores del proceso de GPU en cada carga de página, así que se mantienen desactivados.
+- **Vídeos MP4/HLS**: Kinetix detecta ahora cuándo un vídeo falla por códec no soportado y lo explica, en vez de dejar un reproductor negro sin explicación. El estado real de los códecs del motor se comprueba al arrancar (no se supone) y se muestra en el diálogo "Acerca de".
+
+### Añadido
+- **Configuración ▸ Rendimiento ▸ "Flags de render antiguos (1.1.1)"**: devuelve los flags de renderizado de la 1.1.1 (Vulkan, SkiaGraphite y zero-copy) para quien prefiera ese comportamiento. Útil para diagnosticar diferencias de color.
+- **`tools/build_webengine_codecs.ps1` / `.sh`**: compilan Qt WebEngine con los códecs propietarios (`-DQT_FEATURE_webengine_proprietary_codecs=ON`), que es la **única** forma de que los vídeos en MP4/HLS se reproduzcan. Documentados los requisitos reales (16 GB de RAM, ~60 GB de disco, 2-6 horas) y el aviso de licencias de H.264/AAC.
+
 ## [1.1.2] - 2026-10-19
 
 Parche de correcciones: no se añade ninguna funcionalidad nueva.

@@ -18,6 +18,12 @@ const QString linkPrefix()
     return QStringLiteral("KINETIX-LINK:");
 }
 
+// Prefijo de los avisos de códec incompatible.
+const QString codecPrefix()
+{
+    return QStringLiteral("KINETIX-CODEC:");
+}
+
 } // namespace
 
 KinetixPage::KinetixPage(QWebEngineProfile *profile, QObject *parent)
@@ -77,6 +83,13 @@ void KinetixPage::installHoverScript()
 void KinetixPage::javaScriptConsoleMessage(JavaScriptConsoleMessageLevel level, const QString &message,
                                            int lineNumber, const QString &sourceID)
 {
+    // Aviso de códec no soportado (H.264/AAC). Lo emite el script de la
+    // página cuando un <video> falla con MEDIA_ERR_SRC_NOT_SUPPORTED.
+    if (message.startsWith(codecPrefix())) {
+        emit codecUnsupported();
+        return;
+    }
+
     // Formato esperado: KINETIX-LINK:<nonce>:<url>
     // Los mensajes sin el nonce correcto se descartan: son de la página web.
     if (message.startsWith(linkPrefix())) {
